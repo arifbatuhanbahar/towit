@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: towit
+      POSTGRES_PASSWORD: towit
+      POSTGRES_DB: towit
+    ports:
+      - "5432:5432"
+    volumes:
+      - towit_pg:/var/lib/postgresql/data
+
+volumes:
+  towit_pg:

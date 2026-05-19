@@ -1,0 +1,308 @@
+openapi: 3.0.3
+info:
+  title: Towit API
+  version: "0.1.0"
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      summary: Sağlık kontrolü
+      responses:
+        "200":
+          description: OK
+  /auth/register:
+    post:
+      summary: Kayıt (müşteri / çekici)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                role: { type: string, enum: [customer, operator] }
+      responses:
+        "201": { description: Created }
+  /auth/login:
+    post:
+      summary: Giriş
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: OK }
+  /auth/refresh:
+    post:
+      summary: Access token yenileme
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200": { description: OK }
+  /me:
+    get:
+      summary: Oturumdaki kullanıcı
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /cities:
+    get:
+      summary: İl listesi (statik)
+      responses:
+        "200": { description: OK }
+  /places/suggest:
+    post:
+      summary: Varış için yer önerileri (sunucu → Google, anahtar opsiyonel)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /places/resolve:
+    post:
+      summary: placeId → lat/lng
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /operators/search:
+    post:
+      summary: Çekici + fiyat önizlemesi
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /operators/me:
+    put:
+      summary: Çekici profil + tarife güncelle
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /jobs:
+    get:
+      summary: Talepler (rol bazlı liste)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: OK }
+    post:
+      summary: Talep oluştur
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: Created }
+  /jobs/{id}:
+    get:
+      summary: Talep detayı
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+    patch:
+      summary: Talep güncelle (iptal / kabul / red / durum)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+  /jobs/{id}/stream:
+    get:
+      summary: Job canlı akışı (SSE)
+      description: |
+        Server-Sent Events ile job snapshot event'leri yayınlar.
+        Not: EventSource Authorization header gönderemediği için bu uç, `access` query param ile JWT kabul eder.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: access
+          required: true
+          schema: { type: string }
+          description: JWT access token (EventSource için)
+      responses:
+        "200":
+          description: SSE stream (event: job, event: ping)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /jobs/{id}/route:
+    get:
+      summary: Çekici — çekim noktasına gidiş rotası (Google+trafik, OSRM, yedek düz hat)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: fromLat
+          schema: { type: number }
+          description: Canlı konum enlemi (opsiyonel; yoksa hizmet merkezi)
+        - in: query
+          name: fromLng
+          schema: { type: number }
+          description: Canlı konum boylamı
+      responses:
+        "200": { description: OK }
+  /jobs/{id}/route-to-destination:
+    get:
+      summary: Çekici — varışa gidiş rotası (çekim→varış; yalnızca yolda iken)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: fromLat
+          schema: { type: number }
+          description: Canlı konum enlemi (opsiyonel; yoksa çekim noktası)
+        - in: query
+          name: fromLng
+          schema: { type: number }
+          description: Canlı konum boylamı
+      responses:
+        "200": { description: OK }
+
+  /directions:
+    get:
+      summary: Rota önizlemesi (ORS / Google / Haversine yedek zinciri)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: fromLat
+          required: true
+          schema: { type: number }
+          description: Başlangıç enlemi
+        - in: query
+          name: fromLng
+          required: true
+          schema: { type: number }
+          description: Başlangıç boylamı
+        - in: query
+          name: toLat
+          required: true
+          schema: { type: number }
+          description: Varış enlemi
+        - in: query
+          name: toLng
+          required: true
+          schema: { type: number }
+          description: Varış boylamı
+      responses:
+        "200":
+          description: OK — points (LatLng[]), distanceMeters, distanceKm, durationSeconds, durationMinutes, source
+        "400": { description: Geçersiz koordinat }
+
+  /jobs/{id}/location:
+    patch:
+      summary: Çekici canlı konum güncellemesi
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lng]
+              properties:
+                lat: { type: number }
+                lng: { type: number }
+      responses:
+        "200": { description: OK }
+        "403": { description: Bu talep size ait değil veya rol hatası }
+        "409": { description: Talep kabul/yolda durumunda değil }
+
+  /jobs/{id}/demo-payment:
+    post:
+      summary: Demo ödeme (gerçek PSP yok)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+  /jobs/{id}/review:
+    post:
+      summary: Müşteri — tamamlanmış iş için değerlendirme
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string, maxLength: 500, nullable: true }
+      responses:
+        "201": { description: Değerlendirme kaydedildi }
+        "409":
+          description: Zaten değerlendirildi veya iş tamamlanmamış
+  /operators/{id}/reviews:
+    get:
+      summary: Operatörün özet değerlendirmeleri (public)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Ortalama puan, yorum sayısı ve son yorumlar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  average: { type: number, nullable: true }
+                  count: { type: integer }
+                  recent:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        rating: { type: integer }
+                        comment: { type: string, nullable: true }
+                        createdAt: { type: string, format: date-time }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
