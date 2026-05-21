@@ -1,233 +1,130 @@
-import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import { api } from "../../lib/api";
-import { reverseGeocode } from "../../lib/geocode";
-import OperatorPreviewMap from "../../components/map/OperatorPreviewMap";
-import { statusBadge } from "../../lib/jobStatus";
-import { haversineKm, type LatLng } from "../../lib/geo";
-import { getStoredRole, isAuthenticated } from "../../lib/auth";
+import { useState, useEffect } from 'react';
+import { StatusBadge } from '../../components/Shared';
+import MapView from '../../components/MapView';
+import { Icon, BreakdownIcon, VehicleIcon, BREAKDOWN_LABEL } from '../../components/Icons';
+import { getJob, patchJob } from '../../lib/api';
+import type { JobDetail, AuthUser } from '../../lib/api';
 
-type Job = {
-  id: string;
-  status: string;
-  priceSnapshot: string;
-  distanceKm: number;
-  pickup: LatLng;
-  destination: LatLng;
-  customerEmail: string;
-  createdAt: string;
-};
+interface Props { user: AuthUser; jobId: string; onBack: () => void; onGoRoute?: (job: JobDetail) => void; }
 
-type Me = {
-  operatorProfile: null | {
-    serviceCenterLat: number;
-    serviceCenterLng: number;
+export default function OperatorJobPage({ user, jobId, onBack, onGoRoute }: Props) {
+  const [job, setJob]   = useState<JobDetail | null>(null);
+  const [err, setErr]   = useState('');
+  const [acting, setActing] = useState(false);
+
+  useEffect(() => {
+    getJob(jobId).then(setJob).catch(() => setErr('Talep yüklenemedi.'));
+    const id = setInterval(() => getJob(jobId).then(setJob).catch(() => {}), 5000);
+    return () => clearInterval(id);
+  }, [jobId]);
+
+  const ACTIONS: Record<string, { label: string; action: string; cls: string; disabled?: boolean; route?: boolean }> = {
+    open:      { label: 'İşi kabul et',             action: 'accept',   cls: 'btn-primary' },
+    accepted:  { label: 'Rotayı aç',                 action: '',         cls: 'btn-primary', route: true },
+    en_route:  { label: 'Teslim edildi — Tamamla', action: 'complete', cls: 'btn-success' },
+    completed: { label: 'İş tamamlandı',             action: '',         cls: 'btn-ghost', disabled: true },
   };
-};
 
-export default function OperatorJobPage() {
-  const { id } = useParams();
-  if (!isAuthenticated()) return <Navigate to="/login" replace />;
-  if (getStoredRole() !== "operator") return <Navigate to="/customer" replace />;
-  if (!id) return <Navigate to="/operator" replace />;
-  return <OperatorJobView id={id} />;
-}
-
-function OperatorJobView({ id }: { id: string }) {
-  const navigate = useNavigate();
-  const [job, setJob] = useState<Job | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [pickupAddr, setPickupAddr] = useState<string | null>(null);
-  const [destAddr, setDestAddr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [serviceCenter, setServiceCenter] = useState<{ lat: number; lng: number } | null>(null);
-
-  useEffect(() => {
-    api<Me>("/me")
-      .then((m) => {
-        if (m.operatorProfile) {
-          setServiceCenter({ lat: m.operatorProfile.serviceCenterLat, lng: m.operatorProfile.serviceCenterLng });
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const j = await api<Job>(`/jobs/${id}`);
-        if (!alive) return;
-        setJob((prev) => {
-          if (!prev) {
-            reverseGeocode(j.pickup.lat, j.pickup.lng).then((a) => { if (alive) setPickupAddr(a); });
-            reverseGeocode(j.destination.lat, j.destination.lng).then((a) => { if (alive) setDestAddr(a); });
-          }
-          return j;
-        });
-      } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : "Yüklenemedi");
-      }
-    };
-    load();
-    const t = window.setInterval(load, 3000);
-    return () => { alive = false; window.clearInterval(t); };
-  }, [id]);
-
-  async function act(action: "accept" | "reject" | "en_route" | "complete") {
-    setErr(null);
-    setBusy(true);
+  async function handleAction() {
+    if (!job) return;
+    const act = ACTIONS[job.status];
+    if (!act) return;
+    if (act.route) { onGoRoute?.(job); return; }
+    if (!act.action) return;
+    setActing(true); setErr('');
     try {
-      await api(`/jobs/${id}`, { method: "PATCH", json: { action } });
-      const updated = await api<Job>(`/jobs/${id}`);
-      setJob(updated);
-      if (action === "accept") {
-        navigate(`/operator/jobs/${id}/rota`, { replace: true });
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "İşlem başarısız");
+      const r = await patchJob(jobId, act.action);
+      setJob(j => j ? { ...j, status: r.status as string } : j);
+    } catch (ex: unknown) {
+      setErr(ex instanceof Error ? ex.message : 'İşlem başarısız.');
     } finally {
-      setBusy(false);
+      setActing(false);
     }
   }
 
-  const badge = job ? statusBadge(job.status) : null;
+  async function rejectJob() {
+    try { await patchJob(jobId, 'reject'); onBack(); } catch (ex: unknown) { setErr(ex instanceof Error ? ex.message : 'Reddetme başarısız.'); }
+  }
+
+  if (!job) return (
+    <div className="towit">
+      <div className="scroll-area"><div className="screen"><div className="t-muted" style={{ textAlign: 'center', padding: '2rem 0' }}>{err || 'Yükleniyor…'}</div></div></div>
+    </div>
+  );
+
+  const BIcon = BreakdownIcon[job.breakdownType] || BreakdownIcon.diger;
+  const VIcon = VehicleIcon[job.operator?.vehicleType ?? 'platform'] || VehicleIcon.platform;
+  const action = ACTIONS[job.status];
+  const phoneVisible = job.status === 'accepted' || job.status === 'en_route';
 
   return (
-    <div>
-      <p style={{ marginBottom: 16 }}>
-        <Link to="/operator" className="btn btn-ghost" style={{ display: "inline-flex", padding: "6px 0" }}>
-          ← Panele dön
-        </Link>
-      </p>
+    <div className="towit">
+      <div className="scroll-area">
+        <div className="screen">
+          <button className="btn-link" onClick={onBack} style={{ alignSelf: 'flex-start' }}>← Panele dön</button>
 
-      {!job ? (
-        <div className="card">
-          <p className="muted">{err ?? "Yükleniyor…"}</p>
+          {err && <div style={{ padding: '10px 14px', background: 'var(--danger-soft)', color: 'var(--danger)', borderRadius: 'var(--r-md)', fontSize: '0.875rem' }}>{err}</div>}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: '1.5rem', fontWeight: 900, letterSpacing: '-0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.customerEmail}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <StatusBadge status={job.status} />
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>#{job.id.slice(-6).toUpperCase()}</span>
+            </div>
+          </div>
+
+          {/* Müşteri araç bilgileri */}
+          <div className="card stack-3">
+            <div style={{ fontSize: '0.64rem', fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Müşteri Araç Bilgileri</div>
+            {job.breakdownType && job.breakdownType !== 'diger' && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderRadius: 'var(--r-md)', background: 'rgba(239,68,68,0.10)', color: '#f87171', fontWeight: 800, fontSize: '1rem', alignSelf: 'flex-start' }}>
+                <BIcon size={18} />{BREAKDOWN_LABEL[job.breakdownType] ?? job.breakdownType}
+              </div>
+            )}
+            {(job.customerVehicleBrand || job.customerVehicleModel) && (
+              <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                {[job.customerVehicleBrand, job.customerVehicleModel, job.customerVehiclePlate].filter(Boolean).join(' · ')}
+              </div>
+            )}
+            {phoneVisible && job.customerPhone && (
+              <a href={`tel:${job.customerPhone}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px var(--s-4)', borderRadius: 'var(--r-md)', background: 'var(--success-soft)', border: '1px solid rgba(34,197,94,0.25)', textDecoration: 'none', color: 'var(--success)' }}>
+                <span style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--success)', color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon.Phone size={17} /></span>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text)' }}>Müşteriyi ara</div>
+                  <div style={{ fontSize: '0.775rem', color: 'var(--text-muted)', marginTop: 2 }}>{job.customerPhone} · <Icon.Shield size={11} /> Gerçek numaran gizli</div>
+                </div>
+              </a>
+            )}
+          </div>
+
+          {/* Detay grid */}
+          <div className="grid-2" style={{ gap: 'var(--s-3)' }}>
+            {[
+              ['Çekim', `${job.pickup.lat.toFixed(4)}, ${job.pickup.lng.toFixed(4)}`],
+              ['Varış', `${job.destination.lat.toFixed(4)}, ${job.destination.lng.toFixed(4)}`],
+              ['Mesafe', `${job.distanceKm.toFixed(1)} km`],
+              ['Ücret', `${Number(job.priceSnapshot).toLocaleString('tr-TR')} ₺`],
+            ].map(([k, v]) => (
+              <div key={k} style={{ padding: 'var(--s-3) var(--s-4)', background: 'var(--surface)', borderRadius: 'var(--r-md)' }}>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 5 }}>{k}</div>
+                <div style={{ fontWeight: 800, fontSize: '0.9375rem', fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <MapView height={190} pickup={job.pickup} destination={job.destination} />
+
+          {action && (
+            <button className={`btn ${action.cls} btn-square`} style={{ minHeight: 60, fontSize: '1rem', borderRadius: 'var(--r-lg)' }} disabled={action.disabled || acting} onClick={handleAction}>
+              {acting ? 'İşleniyor…' : action.label}
+            </button>
+          )}
+
+          {job.status !== 'completed' && job.status !== 'en_route' && (
+            <button className="btn btn-danger-ghost btn-sm btn-square" style={{ marginTop: -8 }} onClick={rejectJob}>Reddet / İptal et</button>
+          )}
         </div>
-      ) : (
-        <div className="card">
-          {/* Başlık + durum rozeti */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-            <div>
-              <h2 style={{ margin: "0 0 4px" }}>Talep detayı</h2>
-              <span className="muted" style={{ fontSize: "0.8rem" }}>
-                {new Date(job.createdAt).toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric" })}{" "}
-                {new Date(job.createdAt).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}
-              </span>
-            </div>
-            {badge ? (
-              <span style={{
-                display: "inline-flex", alignItems: "center", padding: "5px 12px",
-                borderRadius: 20, background: badge.bg, color: badge.color,
-                fontSize: "0.82rem", fontWeight: 700, flexShrink: 0
-              }}>
-                {badge.label}
-              </span>
-            ) : null}
-          </div>
-
-          {/* Müşteri */}
-          <div style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: 10, marginBottom: 12 }}>
-            <div className="muted" style={{ fontSize: "0.75rem", marginBottom: 3 }}>Müşteri</div>
-            <div style={{ fontWeight: 600 }}>{job.customerEmail}</div>
-          </div>
-
-          {/* Çekim ve Varış */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-            <div style={{ padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#16a34a", flexShrink: 0 }} />
-                <span className="muted" style={{ fontSize: "0.75rem" }}>Çekim noktası</span>
-              </div>
-              <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>
-                {pickupAddr ?? `${job.pickup.lat.toFixed(5)}, ${job.pickup.lng.toFixed(5)}`}
-              </div>
-              <div className="muted" style={{ fontSize: "0.72rem", marginTop: 2 }}>
-                {job.pickup.lat.toFixed(5)}, {job.pickup.lng.toFixed(5)}
-              </div>
-            </div>
-            <div style={{ padding: "12px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#dc2626", flexShrink: 0 }} />
-                <span className="muted" style={{ fontSize: "0.75rem" }}>Varış noktası</span>
-              </div>
-              <div style={{ fontWeight: 600, fontSize: "0.88rem" }}>
-                {destAddr ?? `${job.destination.lat.toFixed(5)}, ${job.destination.lng.toFixed(5)}`}
-              </div>
-              <div className="muted" style={{ fontSize: "0.72rem", marginTop: 2 }}>
-                {job.destination.lat.toFixed(5)}, {job.destination.lng.toFixed(5)}
-              </div>
-            </div>
-          </div>
-
-          {/* Mesafe ve ücret */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-            <div style={{ background: "#f8fafc", borderRadius: 8, padding: "10px 12px" }}>
-              <div className="muted" style={{ fontSize: "0.72rem", marginBottom: 2 }}>Mesafe</div>
-              <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>{job.distanceKm.toFixed(1)} km</div>
-            </div>
-            <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "10px 12px" }}>
-              <div className="muted" style={{ fontSize: "0.72rem", marginBottom: 2 }}>Tahmini ücret</div>
-              <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>{job.priceSnapshot} ₺</div>
-            </div>
-          </div>
-
-          {/* Rota önizlemesi — yalnızca açık talepler için */}
-          {job.status === "open" && serviceCenter ? (
-            <div style={{ marginBottom: 16 }}>
-              <p className="muted" style={{ fontWeight: 600, marginBottom: 8, fontSize: "0.88rem" }}>
-                Rota önizlemesi (kabul etmeden önce)
-              </p>
-              <OperatorPreviewMap
-                operatorCenter={serviceCenter}
-                pickup={job.pickup}
-                destination={job.destination}
-                jobDistanceKm={job.distanceKm}
-                distanceToPickupKm={haversineKm(serviceCenter, job.pickup)}
-                previewTotal={job.priceSnapshot}
-              />
-            </div>
-          ) : null}
-
-          {err ? <div className="error" style={{ marginBottom: 12 }}>{err}</div> : null}
-
-          {/* Rota butonu */}
-          {(job.status === "accepted" || job.status === "en_route") ? (
-            <Link
-              to={`/operator/jobs/${id}/rota`}
-              className="btn btn-primary"
-              style={{ display: "flex", width: "100%", marginBottom: 10, justifyContent: "center" }}
-            >
-              Navigasyonu aç
-            </Link>
-          ) : null}
-
-          {/* Aksiyon butonları */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {job.status === "open" ? (
-              <>
-                <button type="button" className="btn btn-primary" style={{ flex: 1 }} onClick={() => act("accept")} disabled={busy}>
-                  Kabul et
-                </button>
-                <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={() => act("reject")} disabled={busy}>
-                  Reddet
-                </button>
-              </>
-            ) : null}
-            {job.status === "accepted" ? (
-              <button type="button" className="btn btn-primary" style={{ width: "100%" }} onClick={() => act("en_route")} disabled={busy}>
-                Yola çıkıldı — navigasyona geç
-              </button>
-            ) : null}
-            {job.status === "en_route" ? (
-              <button type="button" className="btn btn-primary" style={{ width: "100%" }} onClick={() => act("complete")} disabled={busy}>
-                Tamamlandı
-              </button>
-            ) : null}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

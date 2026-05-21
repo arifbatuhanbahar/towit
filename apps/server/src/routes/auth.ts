@@ -17,7 +17,7 @@ const authLimiter = rateLimit({ windowMs: 60_000, max: 10 });
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(128),
+  password: z.string().min(6).max(128),
   role: z.enum(["customer", "operator"]),
 });
 

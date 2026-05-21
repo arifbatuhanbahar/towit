@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { JobStatus } from "@prisma/client";
+import { JobStatus, BreakdownType, CustomerVehicleCategory } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { sendError } from "../lib/errors.js";
@@ -10,16 +10,37 @@ import { isValidLatLng, haversineKm } from "../services/geo.js";
 import { resolveDrivingOrHaversineKm } from "../services/distance.js";
 import { routeBetween } from "../services/directions.js";
 import { previewPrice } from "../services/pricing.js";
+import { COMPAT } from "../services/compatibility.js";
 
 export const jobsRouter = Router();
 
 const point = z.object({ lat: z.number(), lng: z.number() });
+
+// UI'da 'yakıt' (Türkçe), DB'de 'yakit' (ASCII) — çeviri yardımcıları
+function toDbBreakdown(v: string): string {
+  return v === "yakıt" ? "yakit" : v;
+}
+function toUiBreakdown(v: string): string {
+  return v === "yakit" ? "yakıt" : v;
+}
 
 const createJobSchema = z.object({
   cityCode: z.string().length(2),
   operatorProfileId: z.string().min(1),
   pickup: point,
   destination: point,
+  // Vehicle details (optional)
+  customerVehicleBrand: z.string().max(50).optional(),
+  customerVehicleModel: z.string().max(80).optional(),
+  customerVehiclePlate: z.string().max(15).optional(),
+  // UI 'yakıt' ve DB 'yakit' her ikisini de kabul et
+  breakdownType: z
+    .enum(["lastik", "motor", "aku", "yakıt", "yakit", "kaza", "diger"])
+    .default("diger"),
+  customerPhone: z.string().max(20).optional(),
+  customerVehicleCategory: z
+    .enum(["otomobil", "motorsiklet", "hafif_ticari", "agir_vasita"])
+    .default("otomobil"),
 });
 
 const patchJobSchema = z.discriminatedUnion("action", [
@@ -34,7 +55,7 @@ async function customerHasBlockingJob(customerId: string) {
   const blocking = await prisma.job.findFirst({
     where: {
       customerId,
-      status: { in: [JobStatus.payment_pending, JobStatus.open, JobStatus.accepted, JobStatus.en_route] },
+      status: { in: [JobStatus.open, JobStatus.accepted, JobStatus.en_route] },
     },
   });
   return !!blocking;
@@ -48,7 +69,9 @@ jobsRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
   if (!parsed.success) {
     return sendError(res, 400, "VALIDATION_ERROR", "Geçersiz istek gövdesi", parsed.error.flatten());
   }
-  const { cityCode, operatorProfileId, pickup, destination } = parsed.data;
+  const { cityCode, operatorProfileId, pickup, destination,
+          customerVehicleBrand, customerVehicleModel, customerVehiclePlate,
+          breakdownType, customerPhone, customerVehicleCategory } = parsed.data;
   if (!isValidLatLng(pickup.lat, pickup.lng) || !isValidLatLng(destination.lat, destination.lng)) {
     return sendError(res, 400, "INVALID_COORDINATES", "Koordinatlar geçersiz");
   }
@@ -67,6 +90,17 @@ jobsRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
     include: { tariff: true },
   });
   if (!op?.tariff) return sendError(res, 404, "NOT_FOUND", "Çekici bulunamadı veya pasif");
+
+  // Uyumluluk kontrolü: seçilen çekici türü müşteri aracıyla uyumlu mu?
+  const compatibleTypes = COMPAT[customerVehicleCategory] ?? [];
+  if (!compatibleTypes.includes(op.vehicleType)) {
+    return sendError(
+      res,
+      400,
+      "INCOMPATIBLE_VEHICLE",
+      "Seçilen çekici bu araç kategorisiyle uyumlu değil"
+    );
+  }
 
   const distToPickup = haversineKm(
     { lat: op.serviceCenterLat, lng: op.serviceCenterLng },
@@ -90,7 +124,13 @@ jobsRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
       destLng: destination.lng,
       distanceKm: jobDistanceKm,
       priceSnapshot: price,
-      status: JobStatus.payment_pending,
+      status: JobStatus.open,
+      customerVehicleBrand: customerVehicleBrand ?? null,
+      customerVehicleModel: customerVehicleModel ?? null,
+      customerVehiclePlate: customerVehiclePlate ?? null,
+      breakdownType: toDbBreakdown(breakdownType) as BreakdownType,
+      customerPhone: customerPhone ?? null,
+      customerVehicleCategory: customerVehicleCategory as CustomerVehicleCategory,
     },
   });
 
@@ -101,27 +141,6 @@ jobsRouter.post("/", requireAuth, async (req: AuthedRequest, res) => {
     distanceKm: job.distanceKm,
     operatorProfileId: op.id,
   });
-});
-
-/** FR-07: gerçek PSP çağrısı yok; başarılı yanıt. */
-jobsRouter.post("/:id/demo-payment", requireAuth, async (req: AuthedRequest, res) => {
-  if (req.user!.role !== "customer") {
-    return sendError(res, 403, "FORBIDDEN", "Yalnızca müşteri demo ödeme tamamlayabilir");
-  }
-  const id = routeParamId(req.params.id);
-  if (!id) return sendError(res, 400, "VALIDATION_ERROR", "Geçersiz talep kimliği");
-  const job = await prisma.job.findUnique({ where: { id } });
-  if (!job || job.customerId !== req.user!.id) {
-    return sendError(res, 404, "NOT_FOUND", "Talep bulunamadı");
-  }
-  if (job.status !== JobStatus.payment_pending) {
-    return sendError(res, 409, "INVALID_STATE_TRANSITION", "Ödeme adımı bu talep için geçerli değil");
-  }
-  const updated = await prisma.job.update({
-    where: { id },
-    data: { status: JobStatus.open },
-  });
-  return res.json({ id: updated.id, status: updated.status, ok: true });
 });
 
 jobsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
@@ -138,7 +157,16 @@ jobsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
         priceSnapshot: j.priceSnapshot.toString(),
         distanceKm: j.distanceKm,
         createdAt: j.createdAt,
-        operator: { businessName: j.operator.businessName },
+        breakdownType: toUiBreakdown(j.breakdownType),
+        customerVehicleBrand: j.customerVehicleBrand,
+        customerVehicleModel: j.customerVehicleModel,
+        customerVehiclePlate: j.customerVehiclePlate,
+        operator: {
+          businessName: j.operator.businessName,
+          vehicleType:  j.operator.vehicleType,
+          vehicleModel: j.operator.vehicleModel,
+          vehicleYear:  j.operator.vehicleYear,
+        },
       })),
     });
   }
@@ -155,7 +183,11 @@ jobsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
       priceSnapshot: j.priceSnapshot.toString(),
       distanceKm: j.distanceKm,
       createdAt: j.createdAt,
+      breakdownType: toUiBreakdown(j.breakdownType),
       customerEmail: j.customer.email,
+      customerVehicleBrand: j.customerVehicleBrand,
+      customerVehicleModel: j.customerVehicleModel,
+      customerVehiclePlate: j.customerVehiclePlate,
       pickup: { lat: j.pickupLat, lng: j.pickupLng },
       destination: { lat: j.destLat, lng: j.destLng },
     })),
@@ -277,16 +309,27 @@ jobsRouter.get("/:id", requireAuth, async (req: AuthedRequest, res) => {
   if (!id) return sendError(res, 400, "VALIDATION_ERROR", "Geçersiz talep kimliği");
   const job = await prisma.job.findUnique({
     where: { id },
-    include: { operator: true, customer: true },
+    include: {
+      operator: { include: { user: true } },
+      customer: true,
+    },
   });
   if (!job) return sendError(res, 404, "NOT_FOUND", "Talep bulunamadı");
+
+  let requestingOp: { id: string } | null = null;
   if (req.user!.role === "customer" && job.customerId !== req.user!.id) {
     return sendError(res, 403, "FORBIDDEN", "Bu talebe erişemezsiniz");
   }
   if (req.user!.role === "operator") {
-    const op = await prisma.operatorProfile.findUnique({ where: { userId: req.user!.id } });
-    if (!op || job.operatorId !== op.id) return sendError(res, 403, "FORBIDDEN", "Bu talebe erişemezsiniz");
+    requestingOp = await prisma.operatorProfile.findUnique({ where: { userId: req.user!.id } });
+    if (!requestingOp || job.operatorId !== requestingOp.id) {
+      return sendError(res, 403, "FORBIDDEN", "Bu talebe erişemezsiniz");
+    }
   }
+
+  const phoneVisible = ["accepted", "en_route"].includes(job.status);
+  const canSeeCustomerPhone = req.user!.role === "operator" && phoneVisible;
+  const canSeeOperatorPhone = req.user!.role === "customer" && phoneVisible;
 
   const operatorLocation =
     job.operatorLat != null && job.operatorLng != null
@@ -301,8 +344,20 @@ jobsRouter.get("/:id", requireAuth, async (req: AuthedRequest, res) => {
     cityCode: job.cityCode,
     pickup: { lat: job.pickupLat, lng: job.pickupLng },
     destination: { lat: job.destLat, lng: job.destLng },
-    operator: { businessName: job.operator.businessName },
+    operator: {
+      businessName: job.operator.businessName,
+      vehicleType:  job.operator.vehicleType,
+      vehicleModel: job.operator.vehicleModel,
+      vehicleYear:  job.operator.vehicleYear,
+      phone: canSeeOperatorPhone ? job.operator.phone : null,
+    },
     customerEmail: job.customer.email,
+    customerVehicleBrand:    job.customerVehicleBrand,
+    customerVehicleModel:    job.customerVehicleModel,
+    customerVehiclePlate:    job.customerVehiclePlate,
+    breakdownType:           toUiBreakdown(job.breakdownType),
+    customerPhone:           canSeeCustomerPhone ? job.customerPhone : null,
+    customerVehicleCategory: job.customerVehicleCategory,
     operatorLocation,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -366,7 +421,7 @@ jobsRouter.get("/:id/stream", async (req, res) => {
   const loadSnapshot = async () => {
     const job = await prisma.job.findUnique({
       where: { id },
-      include: { operator: true, customer: true },
+      include: { operator: { include: { user: true } }, customer: true },
     });
     if (!job) {
       send("job", { error: { code: "NOT_FOUND", message: "Talep bulunamadı" } });
@@ -384,6 +439,10 @@ jobsRouter.get("/:id/stream", async (req, res) => {
       }
     }
 
+    const phoneVisible = ["accepted", "en_route"].includes(job.status);
+    const canSeeCustomerPhone = user.role === "operator" && phoneVisible;
+    const canSeeOperatorPhone = user.role === "customer" && phoneVisible;
+
     const operatorLocation =
       job.operatorLat != null && job.operatorLng != null
         ? { lat: job.operatorLat, lng: job.operatorLng, updatedAt: job.operatorLocAt }
@@ -397,8 +456,20 @@ jobsRouter.get("/:id/stream", async (req, res) => {
       cityCode: job.cityCode,
       pickup: { lat: job.pickupLat, lng: job.pickupLng },
       destination: { lat: job.destLat, lng: job.destLng },
-      operator: { businessName: job.operator.businessName },
+      operator: {
+        businessName: job.operator.businessName,
+        vehicleType:  job.operator.vehicleType,
+        vehicleModel: job.operator.vehicleModel,
+        vehicleYear:  job.operator.vehicleYear,
+        phone: canSeeOperatorPhone ? job.operator.phone : null,
+      },
       customerEmail: job.customer.email,
+      customerVehicleBrand:    job.customerVehicleBrand,
+      customerVehicleModel:    job.customerVehicleModel,
+      customerVehiclePlate:    job.customerVehiclePlate,
+      breakdownType:           toUiBreakdown(job.breakdownType),
+      customerPhone:           canSeeCustomerPhone ? job.customerPhone : null,
+      customerVehicleCategory: job.customerVehicleCategory,
       operatorLocation,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,

@@ -1,0 +1,48 @@
+// ─── apps/server/prisma/schema.prisma ────────────────────────────────────────
+// Only the CHANGED / ADDED sections are shown here.
+// Merge these into your existing schema.prisma.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── New enums ─────────────────────────────────────────────────────────────────
+
+enum VehicleType {
+  platform    // düz platform çekici
+  vinclu      // vinçli / hooklift
+  kanca       // kanca çekici
+  motorsiklet // motosiklet çekicisi
+  agir        // ağır vasıta
+}
+
+enum BreakdownType {
+  lastik // patlak lastik
+  motor  // motor arızası
+  aku    // akü bitti
+  yakıt  // yakıt bitti
+  kaza   // kaza
+  diger  // diğer
+}
+
+// ── OperatorProfile — ADD these fields to the existing model ──────────────────
+
+model OperatorProfile {
+  // … your existing fields …
+
+  phone        String?
+  vehicleModel String      @default("")
+  vehicleYear  Int?
+  vehiclePlate String?
+  vehicleType  VehicleType @default(platform)
+  capacityNote String?
+}
+
+// ── Job — ADD these fields to the existing model ─────────────────────────────
+
+model Job {
+  // … your existing fields …
+
+  customerVehicleBrand String?
+  customerVehicleModel String?
+  customerVehiclePlate String?
+  breakdownType        BreakdownType @default(diger)
+  customerPhone        String?
+}

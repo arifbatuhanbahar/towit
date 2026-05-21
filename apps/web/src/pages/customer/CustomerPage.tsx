@@ -1,751 +1,285 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
-import { api, ApiError } from "../../lib/api";
-import MapPicker, { type LatLng } from "../../components/map/MapPicker";
-import RoutePreviewMap, { type RoutePreviewData } from "../../components/map/RoutePreviewMap";
-import OperatorPreviewMap from "../../components/map/OperatorPreviewMap";
-import CrossRoleCard from "../../components/feedback/CrossRoleCard";
-import { ACTIVE_STATUSES, statusBadge } from "../../lib/jobStatus";
-import { useJobs, type JobSummary } from "../../hooks/useJobs";
-import { getStoredRole, isAuthenticated } from "../../lib/auth";
+import { useState, useMemo } from 'react';
+import { Stepper, PillToggle, ErrorInline } from '../../components/Shared';
+import { BreakdownIcon, VehicleIcon, BREAKDOWN_LABEL } from '../../components/Icons';
+import MapView from '../../components/MapView';
+import { searchOperators, createJob, getJobs } from '../../lib/api';
+import type { OperatorResult, JobSummary, AuthUser } from '../../lib/api';
 
-type Province = { code: string; name: string };
+const CITIES = [
+  { name: 'İstanbul', code: '34' }, { name: 'Ankara', code: '06' }, { name: 'İzmir', code: '35' },
+  { name: 'Bursa', code: '16' }, { name: 'Antalya', code: '07' }, { name: 'Adana', code: '01' },
+];
+const BREAKDOWN_OPTS = [
+  { value: 'motor', label: 'Motor Arızası' }, { value: 'aku', label: 'Akü Bitti' },
+  { value: 'yakıt', label: 'Yakıt Bitti' }, { value: 'kaza', label: 'Kaza' },
+  { value: 'lastik', label: 'Patlak Lastik' }, { value: 'diger', label: 'Diğer' },
+];
+const STEP_TITLES = ['Bölge seç', 'Aracınız', 'Çekim noktası', 'Varış noktası', 'Çekici seç'];
+// Demo koordinatlar (harita entegrasyonuna kadar)
+const DEMO_PICKUP =  { lat: 41.0451, lng: 29.0331 };
+const DEMO_DEST   =  { lat: 41.0082, lng: 28.9784 };
 
-const STEPS = [
-  { id: 1, label: "Bölge" },
-  { id: 2, label: "Çekim" },
-  { id: 3, label: "Varış" },
-  { id: 4, label: "Çekiciler" },
-] as const;
+interface Props { user: AuthUser; onOpenJob: (jobId: string) => void; onGoProfile: () => void; onGoHistory: () => void; }
 
-export default function CustomerPage() {
-  if (!isAuthenticated()) return <Navigate to="/login" replace />;
-  const role = getStoredRole();
-  if (role === "operator") {
-    return <CrossRoleCard sessionRole="operator" suggestedPath="/operator" suggestedLabel="Çekici paneline git" />;
-  }
-  if (role !== "customer") return <Navigate to="/login" replace />;
-  return <CustomerHome />;
-}
+export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory }: Props) {
+  const [step, setStep]         = useState(1);
+  const [city, setCity]         = useState(CITIES[0]);
+  const [cityQ, setCityQ]       = useState('');
+  const [cityOpen, setCityOpen] = useState(false);
+  const [breakdown, setBreakdown] = useState<string | null>(null);
+  const [vBrand, setVBrand]     = useState('');
+  const [vModel, setVModel]     = useState('');
+  const [vPlate, setVPlate]     = useState('');
+  const [cPhone, setCPhone]     = useState('');
+  const [destAddr, setDestAddr] = useState('');
+  const [sortBy, setSortBy]     = useState('best');
+  const [operators, setOperators] = useState<OperatorResult[]>([]);
+  const [jobDist, setJobDist]   = useState(3.4);
+  const [histOpen, setHistOpen] = useState(false);
+  const [history, setHistory]   = useState<JobSummary[]>([]);
+  const [err, setErr]           = useState('');
+  const [creating, setCreating] = useState(false);
 
-function CustomerHome() {
-  const navigate = useNavigate();
-  const allJobs = useJobs();
+  const filteredCities = useMemo(() => {
+    const q = cityQ.toLowerCase().trim();
+    return q ? CITIES.filter(c => c.name.toLowerCase().includes(q)) : CITIES;
+  }, [cityQ]);
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
-  const [provinces, setProvinces] = useState<Province[]>([]);
-  const [cityCode, setCityCode] = useState("34");
-  const [pickup, setPickup] = useState<LatLng | null>(null);
-  const [destMode, setDestMode] = useState<"map" | "search">("map");
-  const [destQuery, setDestQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<{ placeId: string; description: string }[]>([]);
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  const [destination, setDestination] = useState<LatLng | null>(null);
-  const [sort, setSort] = useState<"price" | "distance">("price");
-  const [operators, setOperators] = useState<
-    {
-      operatorProfileId: string;
-      businessName: string;
-      vehicleInfo: string;
-      serviceCenterLat: number;
-      serviceCenterLng: number;
-      distanceToPickupKm: number;
-      previewTotal: string;
-      baseFee: string;
-      perKmFee: string;
-      jobDistanceKm: number;
-      rating: number | null;
-      ratingCount: number;
-    }[]
-  >([]);
-  const [expandedOperatorId, setExpandedOperatorId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [destLat, setDestLat] = useState("");
-  const [destLng, setDestLng] = useState("");
-  const [routePreview, setRoutePreview] = useState<RoutePreviewData | null>(null);
-  const [routePreviewLoading, setRoutePreviewLoading] = useState(false);
-
-  const mapCenter = useMemo<LatLng>(() => {
-    if (cityCode === "06") return { lat: 39.9334, lng: 32.8597 };
-    if (cityCode === "35") return { lat: 38.4237, lng: 27.1428 };
-    return { lat: 41.0082, lng: 28.9784 };
-  }, [cityCode]);
-
-  const provinceName = useMemo(() => provinces.find((p) => p.code === cityCode)?.name ?? "", [provinces, cityCode]);
-
-  useEffect(() => {
-    (async () => {
-      const res = await api<{ provinces: Province[] }>("/cities");
-      setProvinces(res.provinces);
-    })().catch(() => setProvinces([]));
-  }, []);
-
-  const loadSuggestions = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!opts?.silent) setBusy(true);
-      setSuggestLoading(true);
-      setErr(null);
-      try {
-        const res = await api<{ suggestions: { placeId: string; description: string }[] }>("/places/suggest", {
-          method: "POST",
-          json: { query: destQuery, cityCode },
-        });
-        setSuggestions(res.suggestions);
-      } catch (e) {
-        if (!opts?.silent) setErr(e instanceof Error ? e.message : "Öneri alınamadı");
-        setSuggestions([]);
-      } finally {
-        setSuggestLoading(false);
-        if (!opts?.silent) setBusy(false);
-      }
-    },
-    [destQuery, cityCode]
-  );
-
-  useEffect(() => {
-    if (step !== 3 || destMode !== "search") return;
-    const q = destQuery.trim();
-    if (q.length < 3) {
-      setSuggestions([]);
-      return;
-    }
-    const t = window.setTimeout(() => {
-      void loadSuggestions({ silent: true });
-    }, 450);
-    return () => window.clearTimeout(t);
-  }, [destQuery, step, destMode, loadSuggestions]);
-
-  async function useGps() {
-    setErr(null);
-    if (!navigator.geolocation) {
-      setErr("Tarayıcı konum özelliğini desteklemiyor.");
-      return;
-    }
-    setBusy(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setPickup({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        setBusy(false);
-      },
-      () => {
-        setErr("Konum izni verilemedi. Haritaya dokunarak veya işaretçiyi sürükleyerek seçebilirsiniz.");
-        setBusy(false);
-      },
-      { enableHighAccuracy: true, timeout: 12_000 }
+  const sorted = useMemo(() => {
+    return [...operators].sort((a, b) =>
+      sortBy === 'best' ? Number(a.previewTotal) - Number(b.previewTotal) : a.distanceToPickupKm - b.distanceToPickupKm
     );
-  }
+  }, [operators, sortBy]);
 
-  async function pickSuggestion(placeId: string) {
-    setErr(null);
-    setBusy(true);
+  async function goToStep5() {
+    setErr('');
     try {
-      const res = await api<{ lat: number; lng: number }>("/places/resolve", {
-        method: "POST",
-        json: { placeId },
-      });
-      setDestination({ lat: res.lat, lng: res.lng });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Adres konumu alınamadı");
-    } finally {
-      setBusy(false);
+      const r = await searchOperators({ cityCode: city.code, pickup: DEMO_PICKUP, destination: DEMO_DEST, sort: sortBy === 'best' ? 'price' : 'distance' });
+      setOperators(r.operators);
+      setJobDist(r.jobDistanceKm);
+      setStep(5);
+    } catch (ex: unknown) {
+      setErr(ex instanceof Error ? ex.message : 'Çekiciler yüklenemedi.');
     }
   }
 
-  const fetchOperators = useCallback(async () => {
-    if (!pickup || !destination) return;
-    setErr(null);
-    setBusy(true);
+  async function handleSelectOperator(op: OperatorResult) {
+    setCreating(true); setErr('');
     try {
-      const res = await api<{
-        operators: {
-          operatorProfileId: string;
-          businessName: string;
-          vehicleInfo: string;
-          serviceCenterLat: number;
-          serviceCenterLng: number;
-          distanceToPickupKm: number;
-          previewTotal: string;
-          baseFee: string;
-          perKmFee: string;
-          jobDistanceKm: number;
-          rating: number | null;
-          ratingCount: number;
-        }[];
-      }>("/operators/search", {
-        method: "POST",
-        json: { cityCode, pickup, destination, sort },
+      const j = await createJob({
+        cityCode: city.code, operatorProfileId: op.operatorProfileId,
+        pickup: DEMO_PICKUP, destination: DEMO_DEST,
+        customerVehicleBrand: vBrand || undefined,
+        customerVehicleModel: vModel || undefined,
+        customerVehiclePlate: vPlate || undefined,
+        breakdownType: breakdown ?? 'diger',
+        customerPhone: cPhone || undefined,
       });
-      setOperators(res.operators);
-      if (res.operators.length === 0) {
-        setErr("Bu bölgede şu an listelenecek çekici yok. Çekici tarafında profil ve hizmet alanını kontrol edin.");
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Arama başarısız");
+      onOpenJob(j.id);
+    } catch (ex: unknown) {
+      setErr(ex instanceof Error ? ex.message : 'Talep oluşturulamadı.');
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
-  }, [pickup, destination, cityCode, sort]);
+  }
 
-  useEffect(() => {
-    if (step !== 4) return;
-    void fetchOperators();
-  }, [step, fetchOperators]);
-
-  useEffect(() => {
-    if (!pickup || !destination) {
-      setRoutePreview(null);
-      return;
-    }
-    let alive = true;
-    setRoutePreviewLoading(true);
-    api<{ points: LatLng[]; distanceKm: number; durationMinutes: number; source: string }>(
-      `/directions?fromLat=${pickup.lat}&fromLng=${pickup.lng}&toLat=${destination.lat}&toLng=${destination.lng}`
-    )
-      .then((r) => {
-        if (alive) setRoutePreview(r);
-      })
-      .catch(() => {
-        if (alive) setRoutePreview(null);
-      })
-      .finally(() => {
-        if (alive) setRoutePreviewLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [pickup, destination]);
-
-  async function createJob(operatorProfileId: string) {
-    setErr(null);
-    if (!pickup || !destination) return;
-    setBusy(true);
+  async function loadHistory() {
+    if (histOpen) { setHistOpen(false); return; }
     try {
-      const job = await api<{ id: string }>("/jobs", {
-        method: "POST",
-        json: { cityCode, operatorProfileId, pickup, destination },
-      });
-      navigate(`/customer/jobs/${job.id}`);
-    } catch (e) {
-      // CONFLICT_OPEN_JOB: aktif bir talep varken yeni talep → mevcut işe yönlendir
-      if (e instanceof ApiError && e.code === "CONFLICT_OPEN_JOB") {
-        const activeJob = allJobs.find((j) => ACTIVE_STATUSES.has(j.status));
-        if (activeJob) {
-          navigate(`/customer/jobs/${activeJob.id}`);
-          return;
-        }
-      }
-      setErr(e instanceof Error ? e.message : "Talep oluşturulamadı");
-    } finally {
-      setBusy(false);
-    }
+      const r = await getJobs();
+      setHistory(r.jobs);
+      setHistOpen(true);
+    } catch { setHistOpen(true); }
   }
 
-  function goNext() {
-    setErr(null);
-    if (step === 1) {
-      setStep(2);
-      return;
-    }
-    if (step === 2) {
-      if (!pickup) {
-        setErr("Lütfen çekim noktasını haritada seçin veya “Konumumu kullan” deyin.");
-        return;
-      }
-      setStep(3);
-      return;
-    }
-    if (step === 3) {
-      if (!destination) {
-        setErr("Varış noktasını haritadan seçin veya adres aramasından bir sonuç seçin.");
-        return;
-      }
-      setStep(4);
-      return;
-    }
-  }
-
-  function goBack() {
-    setErr(null);
-    if (step <= 1) return;
-    setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3 | 4) : s));
-  }
-
-  function applyManualDest() {
-    const lat = Number(destLat.replace(",", "."));
-    const lng = Number(destLng.replace(",", "."));
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      setErr("Enlem ve boylam sayı olmalıdır (ör. 41.02 ve 28.97).");
-      return;
-    }
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      setErr("Koordinat aralığı geçersiz.");
-      return;
-    }
-    setErr(null);
-    setDestination({ lat, lng });
+  function next() {
+    if (step === 4) { goToStep5(); return; }
+    setStep(s => s + 1);
   }
 
   return (
-    <div>
-      <ActiveJobBanner jobs={allJobs} />
-      <div style={{ marginBottom: 16 }}>
-        <h2 style={{ margin: "0 0 4px", fontSize: "1.35rem", letterSpacing: "-0.02em" }}>Yeni talep</h2>
-        <p className="muted" style={{ margin: 0 }}>
-          Birkaç adımda çekim ve varışı belirleyin; ardından uygun çekicileri görün.
-        </p>
-      </div>
-
-      <nav className="stepper" aria-label="Adımlar">
-        {STEPS.map((s) => {
-          const active = step === s.id;
-          const done = step > s.id;
-          return (
-            <div
-              key={s.id}
-              className={`stepper-item ${active ? "stepper-item--active" : ""} ${done ? "stepper-item--done" : ""}`}
-            >
-              <div className="stepper-dot" aria-hidden>
-                {done ? "✓" : s.id}
-              </div>
-              {s.label}
-            </div>
-          );
-        })}
-      </nav>
-
-      {step === 1 && (
-        <div className="card">
-          <h3>Hangi ildesiniz?</h3>
-          <p className="muted">Liste ve fiyat önizlemesi bu bölgeye göre ayarlanır.</p>
-          <div className="field">
-            <label htmlFor="province">İl seçin</label>
-            <select id="province" value={cityCode} onChange={(e) => setCityCode(e.target.value)}>
-              {provinces.map((p) => (
-                <option key={p.code} value={p.code}>
-                  {p.name} ({p.code})
-                </option>
-              ))}
-            </select>
+    <div className="towit">
+      <div className="scroll-area">
+        <div className="screen">
+          <div className="nav-shortcuts" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-ghost btn-sm btn-square" style={{ width: 'auto', minHeight: 32, padding: '0 12px', fontSize: '0.8rem' }} onClick={onGoHistory}>Geçmiş</button>
+            <button type="button" className="btn btn-ghost btn-sm btn-square" style={{ width: 'auto', minHeight: 32, padding: '0 12px', fontSize: '0.8rem' }} onClick={onGoProfile}>Profil</button>
           </div>
-          <p className="muted" style={{ marginBottom: 0 }}>
-            Seçilen: <strong>{provinceName || "…"}</strong>
-          </p>
-        </div>
-      )}
+          <ErrorInline onClose={() => setErr('')}>{err}</ErrorInline>
+          <Stepper step={step} total={5} title={STEP_TITLES[step - 1]} />
 
-      {step === 2 && (
-        <div className="card">
-          <h3>Aracınız nerede?</h3>
-          <p className="muted">Haritaya dokunun veya mavi işaretçiyi sürükleyin. İsterseniz tek dokunuşla GPS kullanın.</p>
-          <div className="row" style={{ marginBottom: 12 }}>
-            <button type="button" className="btn btn-primary" onClick={useGps} disabled={busy}>
-              Konumumu kullan
-            </button>
-          </div>
-          <MapPicker
-            center={mapCenter}
-            value={pickup}
-            onChange={setPickup}
-            helperText="İpucu: yakınlaştırıp doğru yolu seçmek daha isabetli fiyat verir."
-          />
-          {pickup ? (
-            <div className="row" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
-              <p className="muted" style={{ margin: 0 }}>
-                Seçilen çekim: <strong>{pickup.lat.toFixed(6)}</strong>, <strong>{pickup.lng.toFixed(6)}</strong>
-              </p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setPickup({ lat: pickup.lng, lng: pickup.lat })}
-                title="Enlem/boylam ters geldiyse düzeltir"
-              >
-                Enlem/Boylam değiştir
-              </button>
-            </div>
-          ) : null}
-          {pickup ? (
-            <p className="success-banner" style={{ marginTop: 14 }}>
-              Çekim kaydedildi. İsterseniz işaretçiyi sürükleyerek ince ayar yapabilirsiniz.
-            </p>
-          ) : null}
-        </div>
-      )}
-
-      {step === 3 && (
-        <div className="card">
-          <h3>Nereye gidilecek?</h3>
-          <p className="muted">En kolayı: haritada varışı işaretlemek. Alternatif: adres yazıp listeden seçmek.</p>
-
-          <div className="segmented" role="tablist" aria-label="Varış seçim yöntemi">
-            <button type="button" aria-pressed={destMode === "map"} onClick={() => { setDestMode("map"); setErr(null); }}>
-              Haritada seç
-            </button>
-            <button
-              type="button"
-              aria-pressed={destMode === "search"}
-              onClick={() => {
-                setDestMode("search");
-                setErr(null);
-              }}
-            >
-              Adres ara
-            </button>
-          </div>
-
-          {destMode === "map" ? (
-            <>
-              <MapPicker
-                center={pickup ?? mapCenter}
-                value={destination}
-                onChange={setDestination}
-                helperText="Varış noktasına dokunun veya işaretçiyi sürükleyin. Harita, çekim noktasına odaklanmıştır."
-              />
-              {destination ? (
-                <div className="row" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
-                  <p className="muted" style={{ margin: 0 }}>
-                    Seçilen varış: <strong>{destination.lat.toFixed(6)}</strong>, <strong>{destination.lng.toFixed(6)}</strong>
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => setDestination({ lat: destination.lng, lng: destination.lat })}
-                    title="Enlem/boylam ters geldiyse düzeltir"
-                  >
-                    Enlem/Boylam değiştir
-                  </button>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
+          {/* Adım 1: Şehir */}
+          {step === 1 && (
+            <div className="stack-4">
               <div className="field">
-                <label htmlFor="destq">Adres veya yer adı (en az 3 harf)</label>
-                <input
-                  id="destq"
-                  type="text"
-                  value={destQuery}
-                  onChange={(e) => setDestQuery(e.target.value)}
-                  placeholder="Örn. Kadıköy otogar"
-                  autoComplete="off"
-                />
-              </div>
-              {suggestLoading ? <p className="muted">Aranıyor…</p> : null}
-              {suggestions.length > 0 ? (
-                <ul className="suggestion-list" aria-label="Önerilen yerler">
-                  {suggestions.map((s) => (
-                    <li key={s.placeId}>
-                      <button type="button" className="suggestion-item" onClick={() => pickSuggestion(s.placeId)}>
-                        {s.description}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : destQuery.trim().length >= 3 && !suggestLoading ? (
-                <p className="muted">Sonuç yok. Haritadan seçmeyi deneyin veya Google Places API anahtarını sunucuya ekleyin.</p>
-              ) : null}
-              {destination ? (
-                <div className="row" style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
-                  <p className="muted" style={{ margin: 0 }}>
-                    Seçilen varış: <strong>{destination.lat.toFixed(6)}</strong>, <strong>{destination.lng.toFixed(6)}</strong>
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => setDestination({ lat: destination.lng, lng: destination.lat })}
-                    title="Enlem/boylam ters geldiyse düzeltir"
-                  >
-                    Enlem/Boylam değiştir
-                  </button>
+                <label className="field-label">Şehir</label>
+                <div className="combo">
+                  <input className="input combo__input" placeholder="Şehir ara…"
+                    value={cityOpen ? cityQ : `${city.name} (${city.code})`}
+                    onFocus={() => setCityOpen(true)}
+                    onBlur={() => setTimeout(() => setCityOpen(false), 150)}
+                    onChange={e => setCityQ(e.target.value)} />
+                  {cityOpen && (
+                    <div className="combo__menu">
+                      {filteredCities.map(c => (
+                        <div key={c.code} className="combo__opt" onMouseDown={() => { setCity(c); setCityOpen(false); setCityQ(''); }}>
+                          <span>{c.name}</span><span className="combo__code">({c.code})</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ) : null}
-            </>
+              </div>
+            </div>
           )}
 
-          {destination && pickup ? (
-            <>
-              <p className="success-banner" style={{ marginTop: 14 }}>
-                Varış hazır. {routePreviewLoading ? "Rota hesaplanıyor…" : "Sonraki adımda tahmini ücretleri göreceksiniz."}
-              </p>
-              <RoutePreviewMap
-                pickup={pickup}
-                destination={destination}
-                route={routePreview}
-              />
-            </>
-          ) : destination ? (
-            <p className="success-banner" style={{ marginTop: 14 }}>
-              Varış hazır. Sonraki adımda tahmini ücretleri göreceksiniz.
-            </p>
-          ) : null}
-
-          <details className="past-jobs" style={{ marginTop: 16 }}>
-            <summary>Gelişmiş: koordinat gir</summary>
-            <p className="muted" style={{ marginTop: 8 }}>
-              Enlem ve boylamı biliyorsanız buraya yazabilirsiniz (ondalık ayırıcı olarak nokta kullanın).
-            </p>
-            <div className="row" style={{ marginTop: 8 }}>
-              <input type="text" value={destLat} onChange={(e) => setDestLat(e.target.value)} placeholder="Enlem" aria-label="Enlem" />
-              <input type="text" value={destLng} onChange={(e) => setDestLng(e.target.value)} placeholder="Boylam" aria-label="Boylam" />
-              <button type="button" className="btn btn-secondary" onClick={applyManualDest}>
-                Uygula
-              </button>
+          {/* Adım 2: Araç bilgileri */}
+          {step === 2 && (
+            <div className="stack-5">
+              <div className="stack-3">
+                <div className="field-label">Arıza türü <span style={{ color: 'var(--text-faint)', textTransform: 'none', letterSpacing: 0 }}>(opsiyonel)</span></div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  {BREAKDOWN_OPTS.map(opt => {
+                    const BIcon = BreakdownIcon[opt.value] || BreakdownIcon.diger;
+                    const sel = breakdown === opt.value;
+                    return (
+                      <button key={opt.value} type="button" onClick={() => setBreakdown(sel ? null : opt.value)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 'var(--r-md)', border: `2px solid ${sel ? 'var(--primary)' : 'var(--border-strong)'}`, background: sel ? 'var(--primary-soft)' : 'var(--surface-2)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.875rem', fontWeight: 600, color: 'var(--text)', textAlign: 'left', transition: 'border-color 150ms, background 150ms' }}>
+                        <span style={{ display: 'inline-flex', width: 22, height: 22, alignItems: 'center', justifyContent: 'center', color: sel ? 'var(--primary)' : 'var(--text-muted)' }}><BIcon size={18} /></span>
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid-2" style={{ gap: 12 }}>
+                <div className="field"><label className="field-label">Araç Markası</label><input className="input" value={vBrand} onChange={e => setVBrand(e.target.value)} placeholder="Toyota, Ford…" /></div>
+                <div className="field"><label className="field-label">Araç Modeli</label><input className="input" value={vModel} onChange={e => setVModel(e.target.value)} placeholder="Corolla, Focus…" /></div>
+                <div className="field"><label className="field-label">Plaka</label><input className="input" value={vPlate} onChange={e => setVPlate(e.target.value.toUpperCase())} placeholder="34 XY 001" maxLength={15} /></div>
+                <div className="field">
+                  <label className="field-label">Telefon</label>
+                  <input className="input" type="tel" value={cPhone} onChange={e => setCPhone(e.target.value)} placeholder="0532 123 45 67" />
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>Çekici kabul edince paylaşılır</span>
+                </div>
+              </div>
             </div>
-          </details>
-        </div>
-      )}
+          )}
 
-      {step === 4 && (
-        <div className="card">
-          <h3>Uygun çekiciler</h3>
-          <p className="muted">Tutarlar tahminidir; rota ve trafik değişince fark olabilir.</p>
-          {routePreview ? (
-            <p className="muted" style={{ marginBottom: 14 }}>
-              Rota mesafesi: <strong style={{ color: "var(--text)" }}>{routePreview.distanceKm} km</strong>
-              {" — "}tahmini süre: <strong style={{ color: "var(--text)" }}>~{routePreview.durationMinutes} dk</strong>
-            </p>
-          ) : null}
-          <div className="row" style={{ marginBottom: 14, alignItems: "center" }}>
-            <span className="muted" style={{ fontWeight: 600, marginRight: 4 }}>
-              Sırala:
-            </span>
-            <div className="sort-pills" role="group" aria-label="Sıralama">
-              <button
-                type="button"
-                className={`btn ${sort === "price" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setSort("price")}
-              >
-                En uygun fiyat
-              </button>
-              <button
-                type="button"
-                className={`btn ${sort === "distance" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setSort("distance")}
-              >
-                En yakın
-              </button>
+          {/* Adım 3: Çekim noktası */}
+          {step === 3 && (
+            <div className="stack-4">
+              <MapView height={210} pickup={DEMO_PICKUP} chip={<><span>📍</span> Haritaya dokunun</>} />
+              <div className="coord-confirm">
+                <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+                <div className="stack-2">
+                  <strong style={{ fontSize: 13, fontWeight: 800 }}>Çekim noktası seçildi</strong>
+                  <span style={{ fontSize: 12, color: 'var(--success)' }}>{DEMO_PICKUP.lat}, {DEMO_PICKUP.lng}</span>
+                </div>
+              </div>
             </div>
-            <button type="button" className="btn btn-secondary" onClick={() => void fetchOperators()} disabled={busy}>
-              Yenile
-            </button>
+          )}
+
+          {/* Adım 4: Varış noktası */}
+          {step === 4 && (
+            <div className="stack-4">
+              <PillToggle value="search" onChange={() => {}} options={[{ value: 'map', label: 'Haritada seç' }, { value: 'search', label: 'Adres ara' }]} />
+              <div className="input-wrap">
+                <input className="input" value={destAddr} onChange={e => setDestAddr(e.target.value)} placeholder="Sokak, mahalle…" />
+              </div>
+              <div className="coord-confirm">
+                <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+                <div className="stack-2">
+                  <strong style={{ fontSize: 13, fontWeight: 800 }}>Varış noktası</strong>
+                  <span style={{ fontSize: 12, color: 'var(--success)' }}>{DEMO_DEST.lat}, {DEMO_DEST.lng}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Adım 5: Çekici seç */}
+          {step === 5 && (
+            <div className="stack-4">
+              <PillToggle value={sortBy} onChange={setSortBy} options={[{ value: 'best', label: 'En uygun' }, { value: 'nearest', label: 'En yakın' }]} />
+              {sorted.length === 0 && <div className="t-muted" style={{ textAlign: 'center', padding: '2rem 0' }}>Bu bölgede aktif çekici bulunamadı.</div>}
+              {sorted.map(op => {
+                const VIcon = VehicleIcon[op.vehicleType] || VehicleIcon.platform;
+                return (
+                  <div key={op.operatorProfileId} className="tower-card">
+                    <div className="tower-card__top">
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="tower-card__name">{op.businessName}</div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ display: 'inline-flex', color: 'var(--text-faint)' }}><VIcon size={16} /></span>
+                          <span>{op.vehicleModel}{op.vehicleYear ? ` · ${op.vehicleYear}` : ''}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div className="tower-card__rating">⭐ {op.rating?.toFixed(1) ?? '—'} <span style={{ color: 'var(--text-faint)', fontWeight: 600, fontSize: '0.75rem' }}>({op.ratingCount})</span></div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: 2 }}>~{op.etaMinutes} dk</div>
+                      </div>
+                    </div>
+                    {op.capacityNote && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface-2)', borderRadius: 'var(--r-pill)', padding: '4px 10px', fontSize: '0.775rem', color: 'var(--text-muted)', alignSelf: 'flex-start' }}>
+                        ✓ {op.capacityNote.length > 42 ? op.capacityNote.slice(0, 42) + '…' : op.capacityNote}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                      <span style={{ fontSize: '1.625rem', fontWeight: 900, letterSpacing: '-0.04em', color: 'var(--primary)', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                        ~{Number(op.previewTotal).toLocaleString('tr-TR')} ₺
+                      </span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)', textAlign: 'right', lineHeight: 1.5 }}>
+                        {Number(op.baseFee).toLocaleString('tr-TR')} ₺ taban<br />{jobDist.toFixed(1)} km × {op.perKmFee} ₺
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-faint)' }}>Merkeze ~{op.distanceToPickupKm.toFixed(1)} km</div>
+                    <button className="btn btn-primary" disabled={creating} onClick={() => handleSelectOperator(op)}>
+                      {creating ? 'Talep oluşturuluyor…' : 'Bu çekiciyi seç →'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Navigasyon butonları */}
+          <div className="wizard-cta">
+            {step > 1 && (
+              <button className="btn btn-ghost btn-square" style={{ flex: '0 0 auto', width: 'auto', minWidth: 80 }} onClick={() => setStep(s => s - 1)}>
+                ← Geri
+              </button>
+            )}
+            {step === 2 && (
+              <button className="btn btn-ghost btn-square" style={{ flex: '0 0 auto', width: 'auto', minWidth: 72 }} onClick={() => setStep(3)}>Atla</button>
+            )}
+            {step < 5 && (
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={next}>Devam et</button>
+            )}
           </div>
-          {operators.map((o) => {
-            const expanded = expandedOperatorId === o.operatorProfileId;
-            return (
-              <div key={o.operatorProfileId} className="operator-card" style={{ flexDirection: "column", alignItems: "stretch" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <strong>{o.businessName}</strong>
-                      {o.rating !== null ? (
-                        <span
-                          title={`${o.ratingCount} değerlendirme`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 3,
-                            fontSize: "0.8rem",
-                            padding: "2px 6px",
-                            background: "#fffbeb",
-                            border: "1px solid #fde68a",
-                            borderRadius: 6,
-                            color: "#92400e",
-                          }}
-                        >
-                          <span style={{ color: "#f59e0b" }}>★</span>
-                          <strong>{o.rating.toFixed(1)}</strong>
-                          <span className="muted" style={{ fontSize: "0.72rem" }}>({o.ratingCount})</span>
-                        </span>
-                      ) : (
-                        <span className="muted" style={{ fontSize: "0.75rem" }}>Henüz puan yok</span>
-                      )}
-                    </div>
-                    <div className="muted">{o.vehicleInfo}</div>
-                    <div className="muted" style={{ marginTop: 2 }}>
-                      Tahmini:{" "}
-                      <strong style={{ color: "var(--text)" }}>{o.previewTotal} ₺</strong>
-                    </div>
-                    <div className="muted" style={{ fontSize: "0.78rem", marginTop: 2 }}>
-                      {o.baseFee} ₺ taban + {o.jobDistanceKm.toFixed(1)} km × {o.perKmFee} ₺/km
-                      {" · "}hizmet merkezine ~{o.distanceToPickupKm.toFixed(1)} km
+
+          {/* Geçmiş talepler */}
+          <div className="accordion">
+            <button type="button" className="accordion__toggle" onClick={loadHistory}>
+              <span>Geçmiş talepler</span>
+              <span className={`accordion__chev${histOpen ? ' is-open' : ''}`}><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+            </button>
+            {histOpen && (
+              <div className="accordion__body">
+                {history.length === 0 && <div className="t-muted" style={{ padding: '1rem', textAlign: 'center' }}>Henüz talep yok.</div>}
+                {history.slice(0, 5).map(h => (
+                  <div key={h.id} className="history-row" onClick={() => onOpenJob(h.id)} style={{ cursor: 'pointer' }}>
+                    <span className="history-row__date">{new Date(h.createdAt).toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' })}</span>
+                    <span className="history-row__name">{h.operator?.businessName ?? '—'}</span>
+                    <div className="history-row__right">
+                      <span className="history-row__price">{h.status === 'cancelled' ? '—' : `${Number(h.priceSnapshot).toLocaleString('tr-TR')} ₺`}</span>
+                      <span className={`badge status-${h.status}`}>{h.status}</span>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className={`btn ${expanded ? "btn-secondary" : "btn-ghost"}`}
-                    style={{ flexShrink: 0, marginLeft: 12 }}
-                    onClick={() => setExpandedOperatorId(expanded ? null : o.operatorProfileId)}
-                  >
-                    {expanded ? "Kapat" : "Rotayı gör"}
-                  </button>
-                </div>
-
-                {expanded && pickup && destination ? (
-                  <OperatorPreviewMap
-                    operatorCenter={{ lat: o.serviceCenterLat, lng: o.serviceCenterLng }}
-                    pickup={pickup}
-                    destination={destination}
-                    jobDistanceKm={o.jobDistanceKm}
-                    distanceToPickupKm={o.distanceToPickupKm}
-                    previewTotal={o.previewTotal}
-                    onConfirm={() => createJob(o.operatorProfileId)}
-                    busy={busy}
-                  />
-                ) : null}
-
-                {!expanded ? (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ marginTop: 10 }}
-                    onClick={() => createJob(o.operatorProfileId)}
-                    disabled={busy}
-                  >
-                    Bu çekiciyi seç
-                  </button>
-                ) : null}
+                ))}
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {err ? (
-        <div className="error" role="alert" style={{ marginBottom: 12 }}>
-          {err}
-        </div>
-      ) : null}
-
-      <div className="step-actions">
-        <button type="button" className="btn btn-ghost" onClick={goBack} disabled={step === 1 || busy}>
-          Geri
-        </button>
-        {step < 4 ? (
-          <button type="button" className="btn btn-primary" onClick={goNext} disabled={busy}>
-            Devam
-          </button>
-        ) : (
-          <span className="muted" style={{ fontSize: 0.9 }}>
-            Çekici seçerek talep oluşturun
-          </span>
-        )}
-      </div>
-
-      <JobsList jobs={allJobs} />
-    </div>
-  );
-}
-
-function ActiveJobBanner({ jobs }: { jobs: JobSummary[] }) {
-  const active = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
-  if (!active.length) return null;
-
-  const j = active[0];
-  const badge = statusBadge(j.status);
-
-  return (
-    <div style={{
-      background: "linear-gradient(135deg, #1e40af 0%, #2563eb 100%)",
-      borderRadius: 14, padding: "16px 20px", marginBottom: 20,
-      display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12,
-      boxShadow: "0 4px 14px rgba(37,99,235,.35)",
-    }}>
-      <div>
-        <div style={{ color: "#fff", fontWeight: 700, fontSize: "1rem", marginBottom: 4 }}>
-          Aktif talep mevcut
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{
-            display: "inline-flex", padding: "3px 10px", borderRadius: 20,
-            background: badge.bg, color: badge.color, fontSize: "0.78rem", fontWeight: 700
-          }}>
-            {badge.label}
-          </span>
-          <span style={{ color: "rgba(255,255,255,.8)", fontSize: "0.85rem" }}>
-            {j.operator?.businessName} · {j.priceSnapshot} ₺
-          </span>
-        </div>
-      </div>
-      <Link
-        to={`/customer/jobs/${j.id}`}
-        style={{
-          background: "#fff", color: "#1e40af", borderRadius: 10,
-          padding: "10px 20px", fontWeight: 700, fontSize: "0.9rem",
-          textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap",
-        }}
-      >
-        Durumu gör →
-      </Link>
-    </div>
-  );
-}
-
-function JobCard({ j }: { j: JobSummary }) {
-  const badge = statusBadge(j.status);
-  const isActive = ACTIVE_STATUSES.has(j.status);
-  return (
-    <Link
-      to={`/customer/jobs/${j.id}`}
-      style={{ textDecoration: "none", display: "block" }}
-    >
-      <div style={{
-        border: `1px solid ${isActive ? "#bfdbfe" : "var(--border)"}`,
-        borderLeft: isActive ? "4px solid #2563eb" : "1px solid var(--border)",
-        borderRadius: 12, padding: "12px 14px", marginBottom: 8,
-        background: isActive ? "#f8faff" : "#fafafa",
-        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
-        transition: "box-shadow .15s",
-      }}
-        onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 2px 10px rgba(37,99,235,.1)")}
-        onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "")}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: "0.88rem", marginBottom: 2 }}>
-            {j.operator?.businessName ?? "—"}
-          </div>
-          <div className="muted" style={{ fontSize: "0.78rem" }}>
-            {new Date(j.createdAt).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" })}
-            {" · "}{j.distanceKm?.toFixed(1)} km{" · "}{j.priceSnapshot} ₺
+            )}
           </div>
         </div>
-        <span style={{
-          display: "inline-flex", padding: "3px 10px", borderRadius: 20,
-          background: badge.bg, color: badge.color, fontSize: "0.75rem", fontWeight: 700, flexShrink: 0
-        }}>
-          {badge.label}
-        </span>
       </div>
-    </Link>
-  );
-}
-
-function JobsList({ jobs }: { jobs: JobSummary[] }) {
-  if (!jobs.length) return null;
-
-  const active = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
-  const past = jobs.filter((j) => !ACTIVE_STATUSES.has(j.status));
-
-  return (
-    <div style={{ marginTop: 8 }}>
-      {active.length > 0 ? (
-        <div style={{ marginBottom: 12 }}>
-          <p style={{ fontWeight: 700, margin: "0 0 8px", fontSize: "0.9rem" }}>
-            Aktif talepler ({active.length})
-          </p>
-          {active.map((j) => <JobCard key={j.id} j={j} />)}
-        </div>
-      ) : null}
-
-      {past.length > 0 ? (
-        <details>
-          <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "0.88rem", color: "var(--muted)", marginBottom: 6, userSelect: "none" }}>
-            Geçmiş talepler ({past.length})
-          </summary>
-          <div style={{ marginTop: 8 }}>
-            {past.map((j) => <JobCard key={j.id} j={j} />)}
-          </div>
-        </details>
-      ) : null}
     </div>
   );
 }

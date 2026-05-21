@@ -13,13 +13,37 @@ enum Role {
 }
 
 enum JobStatus {
-  payment_pending
   open
   accepted
   en_route
   completed
   rejected
   cancelled
+}
+
+enum VehicleType {
+  platform    // düz platform çekici
+  vinclu      // vinçli / hooklift
+  kanca       // kanca çekici
+  ahtapot     // spider lift / çok kollu
+  motorsiklet // motosiklet çekicisi
+  agir        // ağır vasıta
+}
+
+enum BreakdownType {
+  lastik // patlak lastik
+  motor  // motor arızası
+  aku    // akü bitti
+  yakit  // yakıt bitti
+  kaza   // kaza
+  diger  // diğer
+}
+
+enum CustomerVehicleCategory {
+  otomobil     // Otomobil / Binek
+  motorsiklet  // Motosiklet
+  hafif_ticari // Hafif Ticari (kamyonet, minibüs)
+  agir_vasita  // Ağır Vasıta (kamyon, TIR)
 }
 
 model User {
@@ -30,20 +54,40 @@ model User {
   createdAt    DateTime @default(now())
 
   operatorProfile OperatorProfile?
+  customerProfile CustomerProfile?
   customerJobs    Job[]           @relation("CustomerJobs")
   refreshTokens   RefreshToken[]
 }
 
+model CustomerProfile {
+  id                String  @id @default(cuid())
+  userId            String  @unique
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name              String  @default("")
+  phone             String?
+  savedVehicleBrand String?
+  savedVehicleModel String?
+  savedVehiclePlate String?
+}
+
 model OperatorProfile {
-  id               String  @id @default(cuid())
-  userId           String  @unique
-  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String      @id @default(cuid())
+  userId           String      @unique
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   businessName     String
   vehicleInfo      String
   serviceCenterLat Float
   serviceCenterLng Float
-  serviceRadiusKm  Float   @default(50)
-  isActive         Boolean @default(true)
+  serviceRadiusKm  Float       @default(50)
+  isActive         Boolean     @default(true)
+
+  // Vehicle details
+  phone        String?
+  vehicleType  VehicleType @default(platform)
+  vehicleModel String      @default("")
+  vehicleYear  Int?
+  vehiclePlate String?
+  capacityNote String?
 
   tariff  Tariff?
   jobs    Job[]    @relation("OperatorJobs")
@@ -77,6 +121,14 @@ model Job {
   operatorLocAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @default(now()) @updatedAt
+
+  // Customer vehicle details
+  customerVehicleBrand    String?
+  customerVehicleModel    String?
+  customerVehiclePlate    String?
+  breakdownType           BreakdownType           @default(diger)
+  customerPhone           String?
+  customerVehicleCategory CustomerVehicleCategory @default(otomobil)
 
   review Review?
 }
