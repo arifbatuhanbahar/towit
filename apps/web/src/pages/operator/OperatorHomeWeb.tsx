@@ -3,7 +3,7 @@ import { TabToggle, EmptyState } from '../../components/Shared';
 import MapView from '../../components/MapView';
 import { Icon, BreakdownIcon, BREAKDOWN_LABEL, STATUS_LABEL } from '../../components/Icons';
 import { getJobs, patchJob } from '../../lib/api';
-import type { JobSummary, JobDetail } from '../../lib/api';
+import type { JobSummary } from '../../lib/api';
 
 interface Props {
   onOpenJob: (id: string) => void;

@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+
 export const Icon = {
   Tow: ({ size = 24 }: { size?: number }) => (
     <svg width={size} height={size} viewBox="0 0 32 24" fill="none">
@@ -78,7 +80,9 @@ export const Icon = {
   ),
 };
 
-export const VehicleIcon: Record<string, ({ size }: { size?: number }) => JSX.Element> = {
+type SizedIcon = ({ size }: { size?: number }) => ReactElement;
+
+export const VehicleIcon: Record<string, SizedIcon> = {
   platform: ({ size = 16 }) => (
     <svg width={size} height={size} viewBox="0 0 28 18" fill="none">
       <path d="M2 12V6a1 1 0 0 1 1-1h8v7" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
@@ -131,7 +135,7 @@ export const VehicleIcon: Record<string, ({ size }: { size?: number }) => JSX.El
   ),
 };
 
-export const BreakdownIcon: Record<string, ({ size }: { size?: number }) => JSX.Element> = {
+export const BreakdownIcon: Record<string, SizedIcon> = {
   motor: ({ size = 18 }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <path d="M12 8.5v-2M12 17.5v-2M8.5 12h-2M17.5 12h-2M9.5 9.5l-1.4-1.4M15.9 15.9l-1.4-1.4M9.5 14.5l-1.4 1.4M15.9 8.1l-1.4 1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>

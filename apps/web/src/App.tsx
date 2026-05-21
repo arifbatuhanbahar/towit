@@ -114,7 +114,6 @@ export default function App() {
               <div className="customer-split">
                 <div className="customer-split__wizard">
                   <CustomerPage
-                    user={user}
                     onOpenJob={openJob}
                     onGoProfile={() => nav('customer_profile')}
                     onGoHistory={() => nav('customer_history')}
@@ -129,7 +128,7 @@ export default function App() {
 
           {screen === 'customer_job' && openJobId && (
             <div className="page-narrow">
-              <CustomerJobPage user={user} jobId={openJobId} onBack={() => nav('customer_home')} />
+              <CustomerJobPage jobId={openJobId} onBack={() => nav('customer_home')} />
             </div>
           )}
 
@@ -141,7 +140,7 @@ export default function App() {
 
           {screen === 'customer_history' && (
             <div className="page-narrow">
-              <CustomerHistory user={user} onBack={() => nav('customer_home')} onOpenJob={openJob} />
+              <CustomerHistory onBack={() => nav('customer_home')} onOpenJob={openJob} />
             </div>
           )}
 
@@ -153,7 +152,6 @@ export default function App() {
           {screen === 'operator_job' && openJobId && (
             <div className="page-narrow">
               <OperatorJobPage
-                user={user}
                 jobId={openJobId}
                 onBack={() => nav('operator_home')}
                 onGoRoute={job => { setRouteJob(job); setScreen('operator_route'); }}
@@ -163,13 +161,13 @@ export default function App() {
 
           {screen === 'operator_profile' && (
             <div className="page-narrow">
-              <OperatorProfile user={user} onLogout={handleLogout} onBack={() => nav('operator_home')} />
+              <OperatorProfile onLogout={handleLogout} onBack={() => nav('operator_home')} />
             </div>
           )}
 
           {screen === 'operator_history' && (
             <div className="page-narrow">
-              <OperatorHistory user={user} onBack={() => nav('operator_home')} />
+              <OperatorHistory onBack={() => nav('operator_home')} />
             </div>
           )}
 

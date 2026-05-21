@@ -32,6 +32,38 @@ export const api = {
   patch:  <T>(path: string, body: unknown, auth = true) => request<T>('PATCH', path, body, auth),
 };
 
+// ── OpenStreetMap (Nominatim) ─────────────────────────────────────────────────
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface PlaceResult {
+  displayName: string;
+  point: GeoPoint;
+}
+
+export async function searchPlaces(query: string, limit = 5): Promise<PlaceResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}&limit=${limit}&addressdetails=0&accept-language=tr`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Adres araması başarısız');
+  const data = (await res.json()) as Array<{ display_name: string; lat: string; lon: string }>;
+  return data.map((item) => ({
+    displayName: item.display_name,
+    point: { lat: Number(item.lat), lng: Number(item.lon) },
+  }));
+}
+
+export async function reverseGeocode(point: GeoPoint): Promise<string> {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${point.lat}&lon=${point.lng}&zoom=18&addressdetails=0&accept-language=tr`;
+  const res = await fetch(url);
+  if (!res.ok) return `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+  const data = (await res.json()) as { display_name?: string };
+  return data.display_name || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────────
 export interface AuthUser { id: string; email: string; role: 'customer' | 'operator' }
 
@@ -109,11 +141,17 @@ export interface JobDetail extends JobSummary {
   operatorLocation: { lat: number; lng: number; updatedAt: string } | null;
   updatedAt: string;
 }
+export interface PatchJobResponse {
+  id: string;
+  status: string;
+}
 
 export async function getJobs() { return api.get<{ jobs: JobSummary[] }>('/jobs'); }
 export async function getJob(id: string) { return api.get<JobDetail>(`/jobs/${id}`); }
 export async function createJob(body: unknown) { return api.post<{ id: string; status: string; priceSnapshot: string }>('/jobs', body); }
-export async function patchJob(id: string, action: string) { return api.patch(`/jobs/${id}`, { action }); }
+export async function patchJob(id: string, action: string) {
+  return api.patch<PatchJobResponse>(`/jobs/${id}`, { action });
+}
 export async function createReview(jobId: string, rating: number, comment?: string) {
   return api.post(`/jobs/${jobId}/review`, { rating, comment: comment || null });
 }

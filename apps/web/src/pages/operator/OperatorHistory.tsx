@@ -2,11 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { EmptyState, StatusBadge } from '../../components/Shared';
 import { Icon, BreakdownIcon, BREAKDOWN_LABEL } from '../../components/Icons';
 import { getJobs } from '../../lib/api';
-import type { JobSummary, AuthUser } from '../../lib/api';
+import type { JobSummary } from '../../lib/api';
 
-interface Props { user: AuthUser; onBack: () => void; }
+interface Props { onBack: () => void; }
 
-export default function OperatorHistory({ user, onBack }: Props) {
+export default function OperatorHistory({ onBack }: Props) {
   const [jobs, setJobs]     = useState<JobSummary[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);

@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Stepper, PillToggle, ErrorInline } from '../../components/Shared';
-import { BreakdownIcon, VehicleIcon, BREAKDOWN_LABEL } from '../../components/Icons';
+import { BreakdownIcon, VehicleIcon } from '../../components/Icons';
 import MapView from '../../components/MapView';
-import { searchOperators, createJob, getJobs } from '../../lib/api';
-import type { OperatorResult, JobSummary, AuthUser } from '../../lib/api';
+import { searchOperators, createJob, getJobs, searchPlaces, reverseGeocode } from '../../lib/api';
+import type { OperatorResult, JobSummary, PlaceResult } from '../../lib/api';
+import type { LatLng } from '../../components/MapView';
 
 const CITIES = [
   { name: 'İstanbul', code: '34' }, { name: 'Ankara', code: '06' }, { name: 'İzmir', code: '35' },
@@ -15,13 +16,11 @@ const BREAKDOWN_OPTS = [
   { value: 'lastik', label: 'Patlak Lastik' }, { value: 'diger', label: 'Diğer' },
 ];
 const STEP_TITLES = ['Bölge seç', 'Aracınız', 'Çekim noktası', 'Varış noktası', 'Çekici seç'];
-// Demo koordinatlar (harita entegrasyonuna kadar)
-const DEMO_PICKUP =  { lat: 41.0451, lng: 29.0331 };
-const DEMO_DEST   =  { lat: 41.0082, lng: 28.9784 };
+const ISTANBUL: LatLng = { lat: 41.0082, lng: 28.9784 };
 
-interface Props { user: AuthUser; onOpenJob: (jobId: string) => void; onGoProfile: () => void; onGoHistory: () => void; }
+interface Props { onOpenJob: (jobId: string) => void; onGoProfile: () => void; onGoHistory: () => void; }
 
-export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory }: Props) {
+export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Props) {
   const [step, setStep]         = useState(1);
   const [city, setCity]         = useState(CITIES[0]);
   const [cityQ, setCityQ]       = useState('');
@@ -31,7 +30,14 @@ export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory
   const [vModel, setVModel]     = useState('');
   const [vPlate, setVPlate]     = useState('');
   const [cPhone, setCPhone]     = useState('');
+  const [pickup, setPickup] = useState<LatLng | null>(null);
+  const [destination, setDestination] = useState<LatLng | null>(null);
+  const [pickupAddr, setPickupAddr] = useState('');
   const [destAddr, setDestAddr] = useState('');
+  const [destSearch, setDestSearch] = useState('');
+  const [destResults, setDestResults] = useState<PlaceResult[]>([]);
+  const [searchingDest, setSearchingDest] = useState(false);
+  const [destMode, setDestMode] = useState<'map' | 'search'>('map');
   const [sortBy, setSortBy]     = useState('best');
   const [operators, setOperators] = useState<OperatorResult[]>([]);
   const [jobDist, setJobDist]   = useState(3.4);
@@ -52,9 +58,13 @@ export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory
   }, [operators, sortBy]);
 
   async function goToStep5() {
+    if (!pickup || !destination) {
+      setErr('Lutfen cekim ve varis konumlarini secin.');
+      return;
+    }
     setErr('');
     try {
-      const r = await searchOperators({ cityCode: city.code, pickup: DEMO_PICKUP, destination: DEMO_DEST, sort: sortBy === 'best' ? 'price' : 'distance' });
+      const r = await searchOperators({ cityCode: city.code, pickup, destination, sort: sortBy === 'best' ? 'price' : 'distance' });
       setOperators(r.operators);
       setJobDist(r.jobDistanceKm);
       setStep(5);
@@ -64,11 +74,15 @@ export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory
   }
 
   async function handleSelectOperator(op: OperatorResult) {
+    if (!pickup || !destination) {
+      setErr('Konum bilgisi eksik. Lutfen cekim ve varis noktalarini secin.');
+      return;
+    }
     setCreating(true); setErr('');
     try {
       const j = await createJob({
         cityCode: city.code, operatorProfileId: op.operatorProfileId,
-        pickup: DEMO_PICKUP, destination: DEMO_DEST,
+        pickup, destination,
         customerVehicleBrand: vBrand || undefined,
         customerVehicleModel: vModel || undefined,
         customerVehiclePlate: vPlate || undefined,
@@ -93,8 +107,51 @@ export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory
   }
 
   function next() {
+    if (step === 3 && !pickup) {
+      setErr('Devam etmeden once cekim noktasini secin.');
+      return;
+    }
     if (step === 4) { goToStep5(); return; }
     setStep(s => s + 1);
+  }
+
+  async function handlePickupSelect(point: LatLng) {
+    setPickup(point);
+    setErr('');
+    const label = await reverseGeocode(point).catch(() => `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`);
+    setPickupAddr(label);
+  }
+
+  async function handleDestinationSelect(point: LatLng) {
+    setDestination(point);
+    setErr('');
+    const label = await reverseGeocode(point).catch(() => `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`);
+    setDestAddr(label);
+    setDestSearch(label);
+    setDestResults([]);
+  }
+
+  async function runDestSearch() {
+    const query = destSearch.trim();
+    if (!query) return;
+    setSearchingDest(true);
+    setErr('');
+    try {
+      const results = await searchPlaces(query, 6);
+      setDestResults(results);
+      if (results.length === 0) setErr('Adres bulunamadi. Haritadan secmeyi deneyin.');
+    } catch {
+      setErr('Adres aramasi yapilamadi.');
+    } finally {
+      setSearchingDest(false);
+    }
+  }
+
+  function pickSearchResult(result: PlaceResult) {
+    setDestination(result.point);
+    setDestAddr(result.displayName);
+    setDestSearch(result.displayName);
+    setDestResults([]);
   }
 
   return (
@@ -168,31 +225,83 @@ export default function CustomerPage({ user, onOpenJob, onGoProfile, onGoHistory
           {/* Adım 3: Çekim noktası */}
           {step === 3 && (
             <div className="stack-4">
-              <MapView height={210} pickup={DEMO_PICKUP} chip={<><span>📍</span> Haritaya dokunun</>} />
-              <div className="coord-confirm">
-                <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
-                <div className="stack-2">
-                  <strong style={{ fontSize: 13, fontWeight: 800 }}>Çekim noktası seçildi</strong>
-                  <span style={{ fontSize: 12, color: 'var(--success)' }}>{DEMO_PICKUP.lat}, {DEMO_PICKUP.lng}</span>
+              <MapView
+                height={250}
+                center={pickup ?? ISTANBUL}
+                pickup={pickup}
+                interactive
+                onSelectLocation={handlePickupSelect}
+                chip={<><span>📍</span> Cekim noktasini secin</>}
+              />
+              {pickup ? (
+                <div className="coord-confirm">
+                  <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+                  <div className="stack-2">
+                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Cekim noktasi secildi</strong>
+                    <span style={{ fontSize: 12, color: 'var(--success)' }}>{pickupAddr || `${pickup.lat.toFixed(5)}, ${pickup.lng.toFixed(5)}`}</span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="t-muted" style={{ fontSize: '0.8rem' }}>Harita uzerinden bir nokta secin.</div>
+              )}
             </div>
           )}
 
           {/* Adım 4: Varış noktası */}
           {step === 4 && (
             <div className="stack-4">
-              <PillToggle value="search" onChange={() => {}} options={[{ value: 'map', label: 'Haritada seç' }, { value: 'search', label: 'Adres ara' }]} />
-              <div className="input-wrap">
-                <input className="input" value={destAddr} onChange={e => setDestAddr(e.target.value)} placeholder="Sokak, mahalle…" />
-              </div>
-              <div className="coord-confirm">
-                <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
-                <div className="stack-2">
-                  <strong style={{ fontSize: 13, fontWeight: 800 }}>Varış noktası</strong>
-                  <span style={{ fontSize: 12, color: 'var(--success)' }}>{DEMO_DEST.lat}, {DEMO_DEST.lng}</span>
+              <PillToggle value={destMode} onChange={v => setDestMode(v as 'map' | 'search')} options={[{ value: 'map', label: 'Haritadan sec' }, { value: 'search', label: 'Adres ara' }]} />
+
+              {destMode === 'search' && (
+                <div className="stack-3">
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      className="input"
+                      value={destSearch}
+                      onChange={e => setDestSearch(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); runDestSearch(); } }}
+                      placeholder="Sokak, mahalle, ilce..."
+                    />
+                    <button type="button" className="btn btn-ghost btn-square" style={{ width: 'auto', padding: '0 14px' }} onClick={runDestSearch} disabled={searchingDest}>
+                      {searchingDest ? 'Araniyor...' : 'Ara'}
+                    </button>
+                  </div>
+                  {destResults.length > 0 && (
+                    <div className="card-flat stack-2">
+                      {destResults.map((item, idx) => (
+                        <button
+                          key={`${item.displayName}-${idx}`}
+                          type="button"
+                          className="btn-link"
+                          style={{ textAlign: 'left', fontSize: '0.8rem' }}
+                          onClick={() => pickSearchResult(item)}
+                        >
+                          {item.displayName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
+
+              <MapView
+                height={250}
+                center={destination ?? pickup ?? ISTANBUL}
+                pickup={pickup}
+                destination={destination}
+                interactive
+                onSelectLocation={handleDestinationSelect}
+                chip={<><span>📌</span> Varis noktasini secin</>}
+              />
+              {destination && (
+                <div className="coord-confirm">
+                  <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+                  <div className="stack-2">
+                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Varis noktasi secildi</strong>
+                    <span style={{ fontSize: 12, color: 'var(--success)' }}>{destAddr || `${destination.lat.toFixed(5)}, ${destination.lng.toFixed(5)}`}</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
