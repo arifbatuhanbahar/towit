@@ -12,6 +12,8 @@ export type ApiErrorCode =
   | "INCOMPATIBLE_VEHICLE"
   | "ALREADY_REVIEWED"
   | "RATE_LIMITED"
+  | "DB_UNAVAILABLE"
+  | "DB_NOT_READY"
   | "INTERNAL";
 
 export function sendError(

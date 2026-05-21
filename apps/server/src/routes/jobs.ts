@@ -19,6 +19,7 @@ import {
   serializeJobDetail,
 } from "../services/jobPresentation.js";
 import { parseOptionalOrigin } from "../services/jobRouting.js";
+import { resolveTransition } from "../services/jobStateMachine.js";
 
 export const jobsRouter = Router();
 
@@ -538,13 +539,11 @@ jobsRouter.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
     if (req.user!.role !== "customer" || job.customerId !== req.user!.id) {
       return sendError(res, 403, "FORBIDDEN", "İptal yalnızca müşteri tarafından yapılabilir");
     }
-    if (job.status === JobStatus.accepted || job.status === JobStatus.en_route) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Kabul sonrası iptal edilemez");
+    const transition = resolveTransition(action, job.status);
+    if (!transition.ok) {
+      return sendError(res, 409, "INVALID_STATE_TRANSITION", transition.message);
     }
-    if (job.status === JobStatus.completed || job.status === JobStatus.cancelled || job.status === JobStatus.rejected) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Bu durumda iptal edilemez");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.cancelled } });
+    const updated = await prisma.job.update({ where: { id }, data: { status: transition.nextStatus } });
     return res.json({ id: updated.id, status: updated.status });
   }
 
@@ -556,34 +555,10 @@ jobsRouter.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
     return sendError(res, 403, "FORBIDDEN", "Bu talep size ait değil");
   }
 
-  if (action === "accept") {
-    if (job.status !== JobStatus.open) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Yalnızca açık talepler kabul edilebilir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.accepted } });
-    return res.json({ id: updated.id, status: updated.status });
+  const transition = resolveTransition(action, job.status);
+  if (!transition.ok) {
+    return sendError(res, 409, "INVALID_STATE_TRANSITION", transition.message);
   }
-  if (action === "reject") {
-    if (job.status !== JobStatus.open) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Yalnızca açık talepler reddedilebilir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.rejected } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-  if (action === "en_route") {
-    if (job.status !== JobStatus.accepted) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Önce talep kabul edilmelidir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.en_route } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-  if (action === "complete") {
-    if (job.status !== JobStatus.en_route) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Önce yola çıkıldı durumuna geçilmelidir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.completed } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-
-  return sendError(res, 400, "VALIDATION_ERROR", "Bilinmeyen işlem");
+  const updated = await prisma.job.update({ where: { id }, data: { status: transition.nextStatus } });
+  return res.json({ id: updated.id, status: updated.status });
 });

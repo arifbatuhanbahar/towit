@@ -5,6 +5,8 @@ import type { JobDetail } from '../../lib/api';
 
 const patchJobMock = vi.fn();
 const updateJobLocationMock = vi.fn();
+const getRouteToPickupMock = vi.fn();
+const getRouteToDestinationMock = vi.fn();
 
 vi.mock('../../components/MapView', () => ({
   default: () => <div data-testid="map-view">map</div>,
@@ -13,6 +15,8 @@ vi.mock('../../components/MapView', () => ({
 vi.mock('../../lib/api', () => ({
   patchJob: (...args: unknown[]) => patchJobMock(...args),
   updateJobLocation: (...args: unknown[]) => updateJobLocationMock(...args),
+  getRouteToPickup: (...args: unknown[]) => getRouteToPickupMock(...args),
+  getRouteToDestination: (...args: unknown[]) => getRouteToDestinationMock(...args),
 }));
 
 const baseJob: JobDetail = {
@@ -46,7 +50,25 @@ describe('OperatorRoutePage', () => {
   beforeEach(() => {
     patchJobMock.mockReset();
     updateJobLocationMock.mockReset();
+    getRouteToPickupMock.mockReset();
+    getRouteToDestinationMock.mockReset();
     updateJobLocationMock.mockResolvedValue({ ok: true });
+    getRouteToPickupMock.mockResolvedValue({
+      origin: { lat: 41.015, lng: 29.05 },
+      pickup: baseJob.pickup,
+      points: [baseJob.pickup, baseJob.destination],
+      durationMinutes: 9,
+      distanceKm: 3.2,
+      source: 'osrm',
+    });
+    getRouteToDestinationMock.mockResolvedValue({
+      origin: baseJob.pickup,
+      destination: baseJob.destination,
+      points: [baseJob.pickup, baseJob.destination],
+      durationMinutes: 14,
+      distanceKm: 3.2,
+      source: 'osrm',
+    });
     Object.defineProperty(globalThis.navigator, 'geolocation', {
       configurable: true,
       value: {

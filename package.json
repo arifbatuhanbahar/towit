@@ -13,6 +13,8 @@
     "test": "npm run test -w apps/server && npm run test -w apps/web",
     "test:server": "npm run test -w apps/server",
     "test:web": "npm run test -w apps/web",
+    "qa": "npm run typecheck && npm test && npm run build",
+    "qc": "npm run lint -w apps/web && npm run test",
     "db:generate": "npm run db:generate -w apps/server",
     "db:migrate": "npm run db:migrate -w apps/server",
     "db:push": "npm run db:push -w apps/server",

@@ -14,7 +14,7 @@ meRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
       customerProfile: true,
     },
   });
-  if (!user) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Kullanıcı yok" } });
+  if (!user) return sendError(res, 404, "NOT_FOUND", "Kullanıcı yok");
 
   return res.json({
     id: user.id,

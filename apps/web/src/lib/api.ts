@@ -157,7 +157,30 @@ export interface CustomerProfile {
   name: string; phone: string | null;
   savedVehicleBrand: string | null; savedVehicleModel: string | null; savedVehiclePlate: string | null;
 }
-export async function getMe() { return api.get<{ id: string; email: string; role: string; customerProfile: CustomerProfile | null; operatorProfile: unknown }>('/me'); }
+export interface OperatorProfileResponse {
+  id: string;
+  businessName: string;
+  serviceCenterLat: number;
+  serviceCenterLng: number;
+  serviceRadiusKm: number;
+  isActive: boolean;
+  phone: string | null;
+  vehicleType: string;
+  vehicleModel: string;
+  vehicleYear: number | null;
+  vehiclePlate: string | null;
+  capacityNote: string | null;
+  tariff: { baseFee: string; perKmFee: string } | null;
+}
+export async function getMe() {
+  return api.get<{
+    id: string;
+    email: string;
+    role: string;
+    customerProfile: CustomerProfile | null;
+    operatorProfile: OperatorProfileResponse | null;
+  }>('/me');
+}
 export async function updateCustomerProfile(data: Partial<CustomerProfile>) { return api.put<CustomerProfile>('/me', data); }
 
 // ── Operators ───────────────────────────────────────────────────────────────────
@@ -198,6 +221,19 @@ export interface PatchJobResponse {
   id: string;
   status: string;
 }
+export interface JobRouteResponse {
+  jobId: string;
+  jobStatus: string;
+  origin: GeoPoint;
+  pickup?: GeoPoint;
+  destination?: GeoPoint;
+  points: GeoPoint[];
+  distanceMeters: number;
+  distanceKm: number;
+  durationSeconds: number;
+  durationMinutes: number;
+  source: 'google' | 'osrm' | 'straight';
+}
 
 export async function getJobs() { return api.get<{ jobs: JobSummary[] }>('/jobs'); }
 export async function getJob(id: string) { return api.get<JobDetail>(`/jobs/${id}`); }
@@ -207,6 +243,16 @@ export async function patchJob(id: string, action: string) {
 }
 export async function updateJobLocation(id: string, point: GeoPoint) {
   return api.patch<{ ok: boolean }>(`/jobs/${id}/location`, point);
+}
+function withOrigin(path: string, origin?: GeoPoint) {
+  if (!origin) return path;
+  return `${path}?originLat=${origin.lat}&originLng=${origin.lng}`;
+}
+export async function getRouteToPickup(id: string, origin?: GeoPoint) {
+  return api.get<JobRouteResponse>(withOrigin(`/jobs/${id}/route`, origin));
+}
+export async function getRouteToDestination(id: string, origin?: GeoPoint) {
+  return api.get<JobRouteResponse>(withOrigin(`/jobs/${id}/route-to-destination`, origin));
 }
 export async function createReview(jobId: string, rating: number, comment?: string) {
   return api.post(`/jobs/${jobId}/review`, { rating, comment: comment || null });

@@ -39,15 +39,6 @@ const centerIcon = svgIcon(`
     <circle cx="16" cy="16" r="4" fill="#f59e0b"/>
   </svg>`, 36);
 
-// ── Auto-fit bounds ───────────────────────────────────────────────────────────
-function FitBounds({ pickup, destination }: { pickup: LatLng; destination: LatLng }) {
-  const map = useMap();
-  useEffect(() => {
-    map.fitBounds([[pickup.lat, pickup.lng], [destination.lat, destination.lng]], { padding: [40, 40], maxZoom: 15 });
-  }, [map, pickup.lat, pickup.lng, destination.lat, destination.lng]);
-  return null;
-}
-
 function ClickToSelect({ enabled, onSelect }: { enabled: boolean; onSelect?: (point: LatLng) => void }) {
   useMapEvents({
     click(event) {
@@ -66,6 +57,7 @@ interface MapViewProps {
   pickup?: LatLng | null;
   destination?: LatLng | null;
   operatorLocation?: LatLng | null;
+  routePoints?: LatLng[] | null;
   center?: LatLng;
   chip?: ReactNode;
   interactive?: boolean;
@@ -80,6 +72,7 @@ export default function MapView({
   pickup,
   destination,
   operatorLocation,
+  routePoints,
   center,
   chip,
   interactive = false,
@@ -89,13 +82,24 @@ export default function MapView({
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!pickup || !destination) { setRoute(null); return; }
+    if (routePoints && routePoints.length >= 2) {
+      setRoute(null);
+      return;
+    }
+    if (!pickup || !destination) {
+      setRoute(null);
+      return;
+    }
 
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const pickupLat = pickup.lat;
+    const pickupLng = pickup.lng;
+    const destinationLat = destination.lat;
+    const destinationLng = destination.lng;
 
-    const url = `https://router.project-osrm.org/route/v1/driving/${pickup.lng},${pickup.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${pickupLng},${pickupLat};${destinationLng},${destinationLat}?overview=full&geometries=geojson`;
 
     fetch(url, { signal: ctrl.signal })
       .then(r => r.json())
@@ -108,21 +112,32 @@ export default function MapView({
         }
       })
       .catch(() => {
-        if (!ctrl.signal.aborted && pickup && destination) {
-          setRoute([[pickup.lat, pickup.lng], [destination.lat, destination.lng]]);
+        if (!ctrl.signal.aborted) {
+          setRoute([[pickupLat, pickupLng], [destinationLat, destinationLng]]);
         }
       });
 
     return () => ctrl.abort();
-  }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng]);
+  }, [pickup, destination, routePoints]);
 
   const mapCenter = center ?? pickup ?? destination ?? ISTANBUL;
-  const hasRoute = Boolean(pickup && destination);
+  const hasRoute = Boolean(routePoints?.length || (pickup && destination));
   const routeLine = useMemo(() => {
+    if (routePoints && routePoints.length >= 2) {
+      return routePoints.map((p) => [p.lat, p.lng] as [number, number]);
+    }
     if (route) return route;
     if (pickup && destination) return [[pickup.lat, pickup.lng], [destination.lat, destination.lng]] as [number, number][];
     return null;
-  }, [route, pickup, destination]);
+  }, [routePoints, route, pickup, destination]);
+
+  function FitRoute({ points }: { points: [number, number][] }) {
+    const map = useMap();
+    useEffect(() => {
+      map.fitBounds(points, { padding: [40, 40], maxZoom: 15 });
+    }, [map, points]);
+    return null;
+  }
 
   return (
     <div style={{ height, borderRadius: 'var(--r-md)', overflow: 'hidden', position: 'relative' }} className="map-real">
@@ -151,7 +166,7 @@ export default function MapView({
           </>
         )}
 
-        {hasRoute && pickup && destination && <FitBounds pickup={pickup} destination={destination} />}
+        {hasRoute && routeLine && <FitRoute points={routeLine} />}
       </MapContainer>
 
       {chip && <div className="map__chip">{chip}</div>}
