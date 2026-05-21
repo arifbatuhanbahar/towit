@@ -11,18 +11,19 @@ import { resolveDrivingOrHaversineKm } from "../services/distance.js";
 import { routeBetween } from "../services/directions.js";
 import { previewPrice } from "../services/pricing.js";
 import { COMPAT } from "../services/compatibility.js";
+import {
+  toDbBreakdown,
+  toUiBreakdown,
+  serializeCustomerJobSummary,
+  serializeOperatorJobSummary,
+  serializeJobDetail,
+} from "../services/jobPresentation.js";
+import { parseOptionalOrigin } from "../services/jobRouting.js";
+import { resolveTransition } from "../services/jobStateMachine.js";
 
 export const jobsRouter = Router();
 
 const point = z.object({ lat: z.number(), lng: z.number() });
-
-// UI'da 'yakıt' (Türkçe), DB'de 'yakit' (ASCII) — çeviri yardımcıları
-function toDbBreakdown(v: string): string {
-  return v === "yakıt" ? "yakit" : v;
-}
-function toUiBreakdown(v: string): string {
-  return v === "yakit" ? "yakıt" : v;
-}
 
 const createJobSchema = z.object({
   cityCode: z.string().length(2),
@@ -151,23 +152,7 @@ jobsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
       include: { operator: true },
     });
     return res.json({
-      jobs: list.map((j) => ({
-        id: j.id,
-        status: j.status,
-        priceSnapshot: j.priceSnapshot.toString(),
-        distanceKm: j.distanceKm,
-        createdAt: j.createdAt,
-        breakdownType: toUiBreakdown(j.breakdownType),
-        customerVehicleBrand: j.customerVehicleBrand,
-        customerVehicleModel: j.customerVehicleModel,
-        customerVehiclePlate: j.customerVehiclePlate,
-        operator: {
-          businessName: j.operator.businessName,
-          vehicleType:  j.operator.vehicleType,
-          vehicleModel: j.operator.vehicleModel,
-          vehicleYear:  j.operator.vehicleYear,
-        },
-      })),
+      jobs: list.map((j) => serializeCustomerJobSummary(j)),
     });
   }
 
@@ -177,20 +162,22 @@ jobsRouter.get("/", requireAuth, async (req: AuthedRequest, res) => {
     include: { customer: true },
   });
   return res.json({
-    jobs: list.map((j) => ({
-      id: j.id,
-      status: j.status,
-      priceSnapshot: j.priceSnapshot.toString(),
-      distanceKm: j.distanceKm,
-      createdAt: j.createdAt,
-      breakdownType: toUiBreakdown(j.breakdownType),
-      customerEmail: j.customer.email,
-      customerVehicleBrand: j.customerVehicleBrand,
-      customerVehicleModel: j.customerVehicleModel,
-      customerVehiclePlate: j.customerVehiclePlate,
-      pickup: { lat: j.pickupLat, lng: j.pickupLng },
-      destination: { lat: j.destLat, lng: j.destLng },
-    })),
+    jobs: list.map((j) =>
+      serializeOperatorJobSummary({
+        id: j.id,
+        status: j.status,
+        priceSnapshot: j.priceSnapshot,
+        distanceKm: j.distanceKm,
+        createdAt: j.createdAt,
+        breakdownType: j.breakdownType,
+        customerEmail: j.customer.email,
+        customerVehicleBrand: j.customerVehicleBrand,
+        customerVehicleModel: j.customerVehicleModel,
+        customerVehiclePlate: j.customerVehiclePlate,
+        pickup: { lat: j.pickupLat, lng: j.pickupLng },
+        destination: { lat: j.destLat, lng: j.destLng },
+      })
+    ),
   });
 });
 
@@ -218,22 +205,11 @@ jobsRouter.get("/:id/route", requireAuth, async (req: AuthedRequest, res) => {
     );
   }
 
-  const qLat = req.query.fromLat;
-  const qLng = req.query.fromLng;
-  const fromLatStr = Array.isArray(qLat) ? qLat[0] : qLat;
-  const fromLngStr = Array.isArray(qLng) ? qLng[0] : qLng;
-
-  let origin: { lat: number; lng: number };
-  if (typeof fromLatStr === "string" && typeof fromLngStr === "string") {
-    const lat = Number(fromLatStr.replace(",", "."));
-    const lng = Number(fromLngStr.replace(",", "."));
-    if (!isValidLatLng(lat, lng)) {
-      return sendError(res, 400, "INVALID_COORDINATES", "Başlangıç koordinatları geçersiz");
-    }
-    origin = { lat, lng };
-  } else {
-    origin = { lat: op.serviceCenterLat, lng: op.serviceCenterLng };
+  const parsedOrigin = parseOptionalOrigin(req.query, { lat: op.serviceCenterLat, lng: op.serviceCenterLng });
+  if (parsedOrigin.error) {
+    return sendError(res, 400, "INVALID_COORDINATES", parsedOrigin.error);
   }
+  const { origin } = parsedOrigin;
 
   const pickup = { lat: job.pickupLat, lng: job.pickupLng };
   const route = await routeBetween(origin, pickup);
@@ -271,21 +247,11 @@ jobsRouter.get("/:id/route-to-destination", requireAuth, async (req: AuthedReque
     return sendError(res, 409, "INVALID_STATE_TRANSITION", "Bu rota yalnızca yolda durumunda kullanılabilir");
   }
 
-  const qLat = req.query.fromLat;
-  const qLng = req.query.fromLng;
-  const fromLatStr = Array.isArray(qLat) ? qLat[0] : qLat;
-  const fromLngStr = Array.isArray(qLng) ? qLng[0] : qLng;
-
-  // Varsayılan: çekim noktasından başla; canlı konum verildiyse onu kullan.
-  let origin: { lat: number; lng: number } = { lat: job.pickupLat, lng: job.pickupLng };
-  if (typeof fromLatStr === "string" && typeof fromLngStr === "string") {
-    const lat = Number(fromLatStr.replace(",", "."));
-    const lng = Number(fromLngStr.replace(",", "."));
-    if (!isValidLatLng(lat, lng)) {
-      return sendError(res, 400, "INVALID_COORDINATES", "Başlangıç koordinatları geçersiz");
-    }
-    origin = { lat, lng };
+  const parsedOrigin = parseOptionalOrigin(req.query, { lat: job.pickupLat, lng: job.pickupLng });
+  if (parsedOrigin.error) {
+    return sendError(res, 400, "INVALID_COORDINATES", parsedOrigin.error);
   }
+  const { origin } = parsedOrigin;
 
   const destination = { lat: job.destLat, lng: job.destLng };
   const route = await routeBetween(origin, destination);
@@ -336,32 +302,34 @@ jobsRouter.get("/:id", requireAuth, async (req: AuthedRequest, res) => {
       ? { lat: job.operatorLat, lng: job.operatorLng, updatedAt: job.operatorLocAt }
       : null;
 
-  return res.json({
-    id: job.id,
-    status: job.status,
-    priceSnapshot: job.priceSnapshot.toString(),
-    distanceKm: job.distanceKm,
-    cityCode: job.cityCode,
-    pickup: { lat: job.pickupLat, lng: job.pickupLng },
-    destination: { lat: job.destLat, lng: job.destLng },
-    operator: {
-      businessName: job.operator.businessName,
-      vehicleType:  job.operator.vehicleType,
-      vehicleModel: job.operator.vehicleModel,
-      vehicleYear:  job.operator.vehicleYear,
-      phone: canSeeOperatorPhone ? job.operator.phone : null,
-    },
-    customerEmail: job.customer.email,
-    customerVehicleBrand:    job.customerVehicleBrand,
-    customerVehicleModel:    job.customerVehicleModel,
-    customerVehiclePlate:    job.customerVehiclePlate,
-    breakdownType:           toUiBreakdown(job.breakdownType),
-    customerPhone:           canSeeCustomerPhone ? job.customerPhone : null,
-    customerVehicleCategory: job.customerVehicleCategory,
-    operatorLocation,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-  });
+  return res.json(
+    serializeJobDetail({
+      id: job.id,
+      status: job.status,
+      priceSnapshot: job.priceSnapshot,
+      distanceKm: job.distanceKm,
+      cityCode: job.cityCode,
+      pickup: { lat: job.pickupLat, lng: job.pickupLng },
+      destination: { lat: job.destLat, lng: job.destLng },
+      operator: {
+        businessName: job.operator.businessName,
+        vehicleType: job.operator.vehicleType,
+        vehicleModel: job.operator.vehicleModel,
+        vehicleYear: job.operator.vehicleYear,
+        phone: canSeeOperatorPhone ? job.operator.phone : null,
+      },
+      customerEmail: job.customer.email,
+      customerVehicleBrand: job.customerVehicleBrand,
+      customerVehicleModel: job.customerVehicleModel,
+      customerVehiclePlate: job.customerVehiclePlate,
+      breakdownType: job.breakdownType,
+      customerPhone: canSeeCustomerPhone ? job.customerPhone : null,
+      customerVehicleCategory: job.customerVehicleCategory,
+      operatorLocation,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    })
+  );
 });
 
 /**
@@ -448,32 +416,32 @@ jobsRouter.get("/:id/stream", async (req, res) => {
         ? { lat: job.operatorLat, lng: job.operatorLng, updatedAt: job.operatorLocAt }
         : null;
 
-    return {
+    return serializeJobDetail({
       id: job.id,
       status: job.status,
-      priceSnapshot: job.priceSnapshot.toString(),
+      priceSnapshot: job.priceSnapshot,
       distanceKm: job.distanceKm,
       cityCode: job.cityCode,
       pickup: { lat: job.pickupLat, lng: job.pickupLng },
       destination: { lat: job.destLat, lng: job.destLng },
       operator: {
         businessName: job.operator.businessName,
-        vehicleType:  job.operator.vehicleType,
+        vehicleType: job.operator.vehicleType,
         vehicleModel: job.operator.vehicleModel,
-        vehicleYear:  job.operator.vehicleYear,
+        vehicleYear: job.operator.vehicleYear,
         phone: canSeeOperatorPhone ? job.operator.phone : null,
       },
       customerEmail: job.customer.email,
-      customerVehicleBrand:    job.customerVehicleBrand,
-      customerVehicleModel:    job.customerVehicleModel,
-      customerVehiclePlate:    job.customerVehiclePlate,
-      breakdownType:           toUiBreakdown(job.breakdownType),
-      customerPhone:           canSeeCustomerPhone ? job.customerPhone : null,
+      customerVehicleBrand: job.customerVehicleBrand,
+      customerVehicleModel: job.customerVehicleModel,
+      customerVehiclePlate: job.customerVehiclePlate,
+      breakdownType: job.breakdownType,
+      customerPhone: canSeeCustomerPhone ? job.customerPhone : null,
       customerVehicleCategory: job.customerVehicleCategory,
       operatorLocation,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
-    };
+    });
   };
 
   let lastSig: string | null = null;
@@ -571,13 +539,11 @@ jobsRouter.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
     if (req.user!.role !== "customer" || job.customerId !== req.user!.id) {
       return sendError(res, 403, "FORBIDDEN", "İptal yalnızca müşteri tarafından yapılabilir");
     }
-    if (job.status === JobStatus.accepted || job.status === JobStatus.en_route) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Kabul sonrası iptal edilemez");
+    const transition = resolveTransition(action, job.status);
+    if (!transition.ok) {
+      return sendError(res, 409, "INVALID_STATE_TRANSITION", transition.message);
     }
-    if (job.status === JobStatus.completed || job.status === JobStatus.cancelled || job.status === JobStatus.rejected) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Bu durumda iptal edilemez");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.cancelled } });
+    const updated = await prisma.job.update({ where: { id }, data: { status: transition.nextStatus } });
     return res.json({ id: updated.id, status: updated.status });
   }
 
@@ -589,34 +555,10 @@ jobsRouter.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
     return sendError(res, 403, "FORBIDDEN", "Bu talep size ait değil");
   }
 
-  if (action === "accept") {
-    if (job.status !== JobStatus.open) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Yalnızca açık talepler kabul edilebilir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.accepted } });
-    return res.json({ id: updated.id, status: updated.status });
+  const transition = resolveTransition(action, job.status);
+  if (!transition.ok) {
+    return sendError(res, 409, "INVALID_STATE_TRANSITION", transition.message);
   }
-  if (action === "reject") {
-    if (job.status !== JobStatus.open) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Yalnızca açık talepler reddedilebilir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.rejected } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-  if (action === "en_route") {
-    if (job.status !== JobStatus.accepted) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Önce talep kabul edilmelidir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.en_route } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-  if (action === "complete") {
-    if (job.status !== JobStatus.en_route) {
-      return sendError(res, 409, "INVALID_STATE_TRANSITION", "Önce yola çıkıldı durumuna geçilmelidir");
-    }
-    const updated = await prisma.job.update({ where: { id }, data: { status: JobStatus.completed } });
-    return res.json({ id: updated.id, status: updated.status });
-  }
-
-  return sendError(res, 400, "VALIDATION_ERROR", "Bilinmeyen işlem");
+  const updated = await prisma.job.update({ where: { id }, data: { status: transition.nextStatus } });
+  return res.json({ id: updated.id, status: updated.status });
 });

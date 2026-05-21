@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import MapView from '../../components/MapView';
 import { Icon, VehicleIcon } from '../../components/Icons';
 import { getMe, updateOperatorProfile, logout } from '../../lib/api';
-import type { AuthUser } from '../../lib/api';
+import type { LatLng } from '../../components/MapView';
 
-interface Props { user: AuthUser; onLogout: () => void; onBack: () => void; }
+interface Props { onLogout: () => void; onBack: () => void; }
 
 const VEHICLE_OPTIONS = [
   { value: 'platform',    label: 'Düz Platform',  sub: 'Geleneksel düz çekici' },
@@ -15,7 +15,8 @@ const VEHICLE_OPTIONS = [
   { value: 'agir',        label: 'Ağır Vasıta',   sub: 'Tır, otobüs için' },
 ];
 
-export default function OperatorProfile({ user, onLogout, onBack }: Props) {
+export default function OperatorProfile({ onLogout, onBack }: Props) {
+  const [serviceCenter, setServiceCenter] = useState<LatLng>({ lat: 41.0082, lng: 28.9784 });
   const [active,       setActive]       = useState(true);
   const [businessName, setBusinessName] = useState('');
   const [phone,        setPhone]        = useState('');
@@ -33,7 +34,7 @@ export default function OperatorProfile({ user, onLogout, onBack }: Props) {
 
   useEffect(() => {
     getMe().then(r => {
-      const p = r.operatorProfile as any;
+      const p = r.operatorProfile;
       if (p) {
         setActive(p.isActive ?? true);
         setBusinessName(p.businessName ?? '');
@@ -44,6 +45,10 @@ export default function OperatorProfile({ user, onLogout, onBack }: Props) {
         setVPlate(p.vehiclePlate ?? '');
         setCapacity(p.capacityNote ?? '');
         setRadius(p.serviceRadiusKm ?? 25);
+        setServiceCenter({
+          lat: Number(p.serviceCenterLat ?? 41.0082),
+          lng: Number(p.serviceCenterLng ?? 28.9784),
+        });
         if (p.tariff) {
           setBaseFee(Number(p.tariff.baseFee) || 350);
           setPerKmFee(Number(p.tariff.perKmFee) || 18);
@@ -60,6 +65,8 @@ export default function OperatorProfile({ user, onLogout, onBack }: Props) {
         businessName, phone: phone || null,
         vehicleType, vehicleModel: vModel, vehicleYear: vYear ? parseInt(vYear) : null,
         vehiclePlate: vPlate || null, capacityNote: capacity || null,
+        serviceCenterLat: serviceCenter.lat,
+        serviceCenterLng: serviceCenter.lng,
         serviceRadiusKm: radius,
         baseFee, perKmFee,
       });
@@ -187,7 +194,16 @@ export default function OperatorProfile({ user, onLogout, onBack }: Props) {
                 <input type="range" min="5" max="100" value={radius} onChange={e => setRadius(Number(e.target.value))} style={{ width: '100%', accentColor: 'var(--primary)' }} />
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>Merkez konumunuzdan bu mesafe içinde talepler size gösterilir.</span>
               </div>
-              <MapView height={180} center={{ lat: 41.0082, lng: 28.9784 }} chip={<><Icon.Pin size={11} /> Merkez konumunuz</>} />
+              <MapView
+                height={220}
+                center={serviceCenter}
+                interactive
+                onSelectLocation={setServiceCenter}
+                chip={<><Icon.Pin size={11} /> Merkez konumunu haritadan secin</>}
+              />
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}>
+                Merkez: {serviceCenter.lat.toFixed(5)}, {serviceCenter.lng.toFixed(5)}
+              </div>
             </div>
           </div>
 

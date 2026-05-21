@@ -4,11 +4,10 @@ import type { JobDetail } from '../../lib/api';
 import { StatusBadge } from '../../components/Shared';
 import MapView from '../../components/MapView';
 import { Icon, BREAKDOWN_LABEL, VehicleIcon } from '../../components/Icons';
-import type { AuthUser } from '../../lib/api';
 
-interface Props { user: AuthUser; jobId: string; onBack: () => void; }
+interface Props { jobId: string; onBack: () => void; }
 
-export default function CustomerJobPage({ user, jobId, onBack }: Props) {
+export default function CustomerJobPage({ jobId, onBack }: Props) {
   const [job, setJob]         = useState<JobDetail | null>(null);
   const [rating, setRating]   = useState(0);
   const [hovered, setHovered] = useState(0);

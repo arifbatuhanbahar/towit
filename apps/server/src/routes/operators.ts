@@ -4,10 +4,8 @@ import { VehicleType } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { requireAuth, requireRole, type AuthedRequest } from "../middleware/auth.js";
 import { sendError } from "../lib/errors.js";
-import { isValidLatLng, haversineKm } from "../services/geo.js";
-import { resolveDrivingOrHaversineKm } from "../services/distance.js";
-import { previewPrice } from "../services/pricing.js";
-import { COMPAT } from "../services/compatibility.js";
+import { isValidLatLng } from "../services/geo.js";
+import { searchOperatorsForCustomer } from "../services/operatorSearch.js";
 
 export const operatorsRouter = Router();
 
@@ -36,101 +34,19 @@ operatorsRouter.post(
       return sendError(res, 400, "VALIDATION_ERROR", "Geçersiz istek gövdesi", parsed.error.flatten());
     }
     const { cityCode, pickup, destination, sort, customerVehicleCategory } = parsed.data;
+    void cityCode;
     if (!isValidLatLng(pickup.lat, pickup.lng) || !isValidLatLng(destination.lat, destination.lng)) {
       return sendError(res, 400, "INVALID_COORDINATES", "Çekim veya varış koordinatları geçersiz");
     }
 
-    const { km: jobDistanceKm } = await resolveDrivingOrHaversineKm(pickup, destination);
-
-    const ops = await prisma.operatorProfile.findMany({
-      where: { isActive: true, tariff: { isNot: null } },
-      include: { tariff: true, user: true },
-    });
-
-    type Row = {
-      operatorProfileId: string;
-      businessName: string;
-      vehicleInfo: string;
-      vehicleType: string;
-      vehicleModel: string;
-      vehicleYear: number | null;
-      vehiclePlate: string | null;
-      capacityNote: string | null;
-      serviceCenterLat: number;
-      serviceCenterLng: number;
-      distanceToPickupKm: number;
-      etaMinutes: number;
-      previewTotal: string;
-      baseFee: string;
-      perKmFee: string;
-      jobDistanceKm: number;
-      rating: number | null;
-      ratingCount: number;
-    };
-    const rows: Row[] = [];
-
-    // Uygun operatörlerin ortalama puanlarını tek sorguda topla
-    const candidateIds = ops.filter((o) => o.tariff).map((o) => o.id);
-    const ratings = candidateIds.length
-      ? await prisma.review.groupBy({
-          by: ["operatorId"],
-          where: { operatorId: { in: candidateIds } },
-          _avg: { rating: true },
-          _count: { _all: true },
-        })
-      : [];
-    const ratingMap = new Map(
-      ratings.map((r) => [r.operatorId, { avg: r._avg.rating, count: r._count._all }])
-    );
-
-    for (const op of ops) {
-      if (!op.tariff) continue;
-      const distToPickup = haversineKm(
-        { lat: op.serviceCenterLat, lng: op.serviceCenterLng },
-        pickup
-      );
-      if (distToPickup > op.serviceRadiusKm) continue;
-      // Araç kategorisi verilmişse uyumsuz çekicileri listeden çıkar
-      if (customerVehicleCategory) {
-        const allowed = COMPAT[customerVehicleCategory] ?? [];
-        if (!allowed.includes(op.vehicleType)) continue;
-      }
-      const total = previewPrice(op.tariff.baseFee, op.tariff.perKmFee, jobDistanceKm);
-      const r = ratingMap.get(op.id);
-      // Şehir içi ortalama 40 km/h ile tahmini varış süresi
-      const etaMinutes = Math.max(1, Math.ceil((distToPickup / 40) * 60));
-      rows.push({
-        operatorProfileId: op.id,
-        businessName: op.businessName,
-        vehicleInfo: op.vehicleInfo,
-        vehicleType: op.vehicleType,
-        vehicleModel: op.vehicleModel,
-        vehicleYear: op.vehicleYear,
-        vehiclePlate: op.vehiclePlate,
-        capacityNote: op.capacityNote,
-        serviceCenterLat: op.serviceCenterLat,
-        serviceCenterLng: op.serviceCenterLng,
-        distanceToPickupKm: distToPickup,
-        etaMinutes,
-        previewTotal: total.toFixed(2),
-        baseFee: op.tariff.baseFee.toString(),
-        perKmFee: op.tariff.perKmFee.toString(),
-        jobDistanceKm,
-        rating: r?.avg ? Number(r.avg.toFixed(2)) : null,
-        ratingCount: r?.count ?? 0,
-      });
-    }
-
-    rows.sort((a, b) => {
-      if (sort === "price") return Number(a.previewTotal) - Number(b.previewTotal);
-      return a.distanceToPickupKm - b.distanceToPickupKm;
-    });
-
-    return res.json({
+    const result = await searchOperatorsForCustomer({
+      pickup,
+      destination,
       sort,
-      jobDistanceKm,
-      operators: rows,
+      customerVehicleCategory,
     });
+
+    return res.json(result);
   }
 );
 
@@ -158,6 +74,12 @@ const profileSchema = z.object({
   capacityNote: z.string().max(200).optional().nullable(),
 });
 
+const UNICODE_REPLACEMENT_CHAR = "\uFFFD";
+
+function hasReplacementChar(value: unknown): boolean {
+  return typeof value === "string" && value.includes(UNICODE_REPLACEMENT_CHAR);
+}
+
 operatorsRouter.put(
   "/me",
   requireAuth,
@@ -168,6 +90,24 @@ operatorsRouter.put(
       return sendError(res, 400, "VALIDATION_ERROR", "Geçersiz istek gövdesi", parsed.error.flatten());
     }
     const d = parsed.data;
+    const textFields: Array<[string, unknown]> = [
+      ["businessName", d.businessName],
+      ["vehicleInfo", d.vehicleInfo],
+      ["phone", d.phone],
+      ["vehicleModel", d.vehicleModel],
+      ["vehiclePlate", d.vehiclePlate],
+      ["capacityNote", d.capacityNote],
+    ];
+    const invalidField = textFields.find(([, value]) => hasReplacementChar(value));
+    if (invalidField) {
+      return sendError(
+        res,
+        400,
+        "VALIDATION_ERROR",
+        "Metinde bozuk karakter algılandı. Lütfen ilgili alanı yeniden girin.",
+        { field: invalidField[0] }
+      );
+    }
 
     // Resolve tariff: accept nested tariff OR flat baseFee/perKmFee
     const rawBase   = d.tariff?.baseFee  ?? d.baseFee  ?? 350;

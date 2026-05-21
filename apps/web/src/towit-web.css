@@ -304,6 +304,10 @@
     flex: 1;
     border-radius: 0;
     padding: var(--s-8);
+    justify-content: center;
+  }
+  .auth-web-wrap > .auth-split .auth-form .auth-footer-link {
+    margin-top: 0;
   }
 }
 

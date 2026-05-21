@@ -1,4 +1,5 @@
 import type { AuthUser } from '../lib/api';
+import type { ReactElement } from 'react';
 
 // ── Nav icons ─────────────────────────────────────────────────────────────────
 const WIcon = {
@@ -13,7 +14,7 @@ const WIcon = {
 };
 
 // ── Nav config ────────────────────────────────────────────────────────────────
-type NavIcon = () => JSX.Element;
+type NavIcon = () => ReactElement;
 interface NavItem { id: string; label: string; I: NavIcon; }
 
 const CUSTOMER_MAIN: NavItem[] = [

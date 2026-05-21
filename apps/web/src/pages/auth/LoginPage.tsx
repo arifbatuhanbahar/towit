@@ -23,7 +23,12 @@ export default function LoginPage({ onLogin, onGoRegister }: Props) {
       const user = await login(email, pwd);
       onLogin(user);
     } catch (ex: unknown) {
-      setErr(ex instanceof Error ? ex.message : 'Giriş başarısız.');
+      const status = typeof ex === 'object' && ex !== null && 'status' in ex ? (ex as { status?: number }).status : undefined;
+      if (status === 503) {
+        setErr('Veritabani servisi kapali. Docker Desktop acip projede "docker compose up -d" calistirin.');
+      } else {
+        setErr(ex instanceof Error ? ex.message : 'Giriş başarısız.');
+      }
     } finally {
       setLoading(false);
     }

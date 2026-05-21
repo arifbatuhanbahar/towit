@@ -9,6 +9,26 @@ import { jobsRouter } from "./routes/jobs.js";
 import { directionsRouter } from "./routes/directions.js";
 import { reviewsRouter } from "./routes/reviews.js";
 import { logger } from "./lib/logger.js";
+import { sendError } from "./lib/errors.js";
+
+function isDatabaseUnavailable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; name?: string; message?: string };
+  if (e.code === "P1000" || e.code === "P1001") return true;
+  if (String(e.name ?? "").includes("PrismaClientInitializationError")) return true;
+  return /can't reach database server|database server.*running/i.test(String(e.message ?? ""));
+}
+
+function isDatabaseNotReady(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; name?: string; message?: string };
+  if (e.code === "P2021" || e.code === "P2022") return true;
+  if (String(e.name ?? "").includes("PrismaClientKnownRequestError")) {
+    const msg = String(e.message ?? "").toLowerCase();
+    return msg.includes("table") || msg.includes("column") || msg.includes("does not exist");
+  }
+  return false;
+}
 
 export function createApp() {
   const app = express();
@@ -32,7 +52,7 @@ export function createApp() {
   app.use(reviewsRouter);
 
   app.use((_req, res) => {
-    res.status(404).json({ error: { code: "NOT_FOUND", message: "Kaynak bulunamadı" } });
+    return sendError(res, 404, "NOT_FOUND", "Kaynak bulunamadı");
   });
 
   app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -42,9 +62,25 @@ export function createApp() {
       path: req.path,
       err: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : err,
     });
-    return res.status(500).json({
-      error: { code: "INTERNAL", message: "Beklenmeyen bir hata oluştu" },
-    });
+
+    if (isDatabaseUnavailable(err)) {
+      return sendError(
+        res,
+        503,
+        "DB_UNAVAILABLE",
+        "Veritabani baglantisi kurulamadi. Lutfen PostgreSQL servisini baslatin."
+      );
+    }
+    if (isDatabaseNotReady(err)) {
+      return sendError(
+        res,
+        503,
+        "DB_NOT_READY",
+        "Veritabani hazir degil. Migrasyonlari calistirin: npm run db:migrate"
+      );
+    }
+
+    return sendError(res, 500, "INTERNAL", "Beklenmeyen bir hata oluştu");
   });
 
   return app;

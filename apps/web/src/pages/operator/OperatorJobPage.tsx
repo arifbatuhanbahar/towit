@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { StatusBadge } from '../../components/Shared';
 import MapView from '../../components/MapView';
-import { Icon, BreakdownIcon, VehicleIcon, BREAKDOWN_LABEL } from '../../components/Icons';
+import { Icon, BreakdownIcon, BREAKDOWN_LABEL } from '../../components/Icons';
 import { getJob, patchJob } from '../../lib/api';
-import type { JobDetail, AuthUser } from '../../lib/api';
+import type { JobDetail } from '../../lib/api';
 
-interface Props { user: AuthUser; jobId: string; onBack: () => void; onGoRoute?: (job: JobDetail) => void; }
+interface Props { jobId: string; onBack: () => void; onGoRoute?: (job: JobDetail) => void; }
 
-export default function OperatorJobPage({ user, jobId, onBack, onGoRoute }: Props) {
+export default function OperatorJobPage({ jobId, onBack, onGoRoute }: Props) {
   const [job, setJob]   = useState<JobDetail | null>(null);
   const [err, setErr]   = useState('');
   const [acting, setActing] = useState(false);
@@ -53,7 +53,6 @@ export default function OperatorJobPage({ user, jobId, onBack, onGoRoute }: Prop
   );
 
   const BIcon = BreakdownIcon[job.breakdownType] || BreakdownIcon.diger;
-  const VIcon = VehicleIcon[job.operator?.vehicleType ?? 'platform'] || VehicleIcon.platform;
   const action = ACTIONS[job.status];
   const phoneVisible = job.status === 'accepted' || job.status === 'en_route';
 
@@ -120,7 +119,7 @@ export default function OperatorJobPage({ user, jobId, onBack, onGoRoute }: Prop
             </button>
           )}
 
-          {job.status !== 'completed' && job.status !== 'en_route' && (
+          {job.status === 'open' && (
             <button className="btn btn-danger-ghost btn-sm btn-square" style={{ marginTop: -8 }} onClick={rejectJob}>Reddet / İptal et</button>
           )}
         </div>
