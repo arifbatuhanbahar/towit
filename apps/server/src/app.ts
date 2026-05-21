@@ -10,6 +10,25 @@ import { directionsRouter } from "./routes/directions.js";
 import { reviewsRouter } from "./routes/reviews.js";
 import { logger } from "./lib/logger.js";
 
+function isDatabaseUnavailable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; name?: string; message?: string };
+  if (e.code === "P1000" || e.code === "P1001") return true;
+  if (String(e.name ?? "").includes("PrismaClientInitializationError")) return true;
+  return /can't reach database server|database server.*running/i.test(String(e.message ?? ""));
+}
+
+function isDatabaseNotReady(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; name?: string; message?: string };
+  if (e.code === "P2021" || e.code === "P2022") return true;
+  if (String(e.name ?? "").includes("PrismaClientKnownRequestError")) {
+    const msg = String(e.message ?? "").toLowerCase();
+    return msg.includes("table") || msg.includes("column") || msg.includes("does not exist");
+  }
+  return false;
+}
+
 export function createApp() {
   const app = express();
   app.use(
@@ -42,6 +61,24 @@ export function createApp() {
       path: req.path,
       err: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : err,
     });
+
+    if (isDatabaseUnavailable(err)) {
+      return res.status(503).json({
+        error: {
+          code: "DB_UNAVAILABLE",
+          message: "Veritabani baglantisi kurulamadi. Lutfen PostgreSQL servisini baslatin.",
+        },
+      });
+    }
+    if (isDatabaseNotReady(err)) {
+      return res.status(503).json({
+        error: {
+          code: "DB_NOT_READY",
+          message: "Veritabani hazir degil. Migrasyonlari calistirin: npm run db:migrate",
+        },
+      });
+    }
+
     return res.status(500).json({
       error: { code: "INTERNAL", message: "Beklenmeyen bir hata oluştu" },
     });

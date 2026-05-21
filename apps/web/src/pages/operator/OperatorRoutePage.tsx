@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icons';
 import MapView from '../../components/MapView';
-import { patchJob } from '../../lib/api';
+import { patchJob, updateJobLocation } from '../../lib/api';
 import type { JobDetail } from '../../lib/api';
+import { useEffect } from 'react';
 
 interface Props { job: JobDetail; onBack: () => void; onComplete: () => void; }
 
@@ -11,9 +12,29 @@ export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
   const [tracking, setTracking] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (!tracking || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        void updateJobLocation(job.id, { lat: coords.latitude, lng: coords.longitude }).catch(() => {});
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [tracking, job.id]);
+
   async function advance() {
     if (phase === 'to_pickup') {
-      setPhase('to_dest');
+      setLoading(true);
+      try {
+        await patchJob(job.id, 'en_route');
+        setPhase('to_dest');
+      } catch {
+        // keep current phase when transition fails
+      } finally {
+        setLoading(false);
+      }
     } else {
       setLoading(true);
       try {

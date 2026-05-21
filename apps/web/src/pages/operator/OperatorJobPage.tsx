@@ -119,7 +119,7 @@ export default function OperatorJobPage({ jobId, onBack, onGoRoute }: Props) {
             </button>
           )}
 
-          {job.status !== 'completed' && job.status !== 'en_route' && (
+          {job.status === 'open' && (
             <button className="btn btn-danger-ghost btn-sm btn-square" style={{ marginTop: -8 }} onClick={rejectJob}>Reddet / İptal et</button>
           )}
         </div>

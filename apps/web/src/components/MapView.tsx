@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import type { ReactNode } from 'react';
 import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 
 // ── Custom SVG div-icons (no broken PNG paths) ────────────────────────────────
 function svgIcon(svg: string, size = 32) {

@@ -10,12 +10,15 @@
     "typecheck": "npm run typecheck:server && npm run typecheck:web",
     "typecheck:server": "tsc --noEmit -p apps/server",
     "typecheck:web": "tsc --noEmit -p apps/web",
-    "test": "npm run test -w apps/server",
+    "test": "npm run test -w apps/server && npm run test -w apps/web",
     "test:server": "npm run test -w apps/server",
+    "test:web": "npm run test -w apps/web",
     "db:generate": "npm run db:generate -w apps/server",
     "db:migrate": "npm run db:migrate -w apps/server",
     "db:push": "npm run db:push -w apps/server",
-    "docker:up": "docker compose up -d",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f --tail=200",
     "clean": "rimraf apps/server/dist apps/web/dist"
   },
   "devDependencies": {

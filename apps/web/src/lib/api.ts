@@ -1,7 +1,42 @@
 const BASE = '/api';
+let refreshInFlight: Promise<string | null> | null = null;
 
 function getToken(): string | null {
   return localStorage.getItem('towit_access');
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem('towit_refresh');
+}
+
+type ApiError = Error & { code?: string; status?: number };
+
+function buildApiError(status: number, payload: unknown): ApiError {
+  const data = (payload ?? {}) as { error?: { message?: string; code?: string } };
+  const err = new Error(data?.error?.message ?? 'Hata') as ApiError;
+  err.code = data?.error?.code;
+  err.status = status;
+  return err;
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const res = await fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return null;
+    if (!data?.accessToken || !data?.refreshToken) return null;
+    localStorage.setItem('towit_access', data.accessToken);
+    localStorage.setItem('towit_refresh', data.refreshToken);
+    return data.accessToken as string;
+  } catch {
+    return null;
+  }
 }
 
 async function request<T>(
@@ -10,18 +45,35 @@ async function request<T>(
   body?: unknown,
   auth = true,
 ): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (auth) {
-    const token = getToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+  async function perform(accessToken?: string): Promise<{ res: Response; data: unknown }> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (auth) {
+      const token = accessToken ?? getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { res, data };
   }
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data?.error?.message ?? 'Hata'), { code: data?.error?.code, status: res.status });
+
+  let { res, data } = await perform();
+  if (!res.ok && auth && res.status === 401 && path !== '/auth/refresh') {
+    refreshInFlight ??= refreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+    const refreshed = await refreshInFlight;
+    if (refreshed) {
+      ({ res, data } = await perform(refreshed));
+    } else {
+      logout();
+    }
+  }
+
+  if (!res.ok) throw buildApiError(res.status, data);
   return data as T;
 }
 
@@ -133,6 +185,7 @@ export interface JobSummary {
   pickup?: { lat: number; lng: number }; destination?: { lat: number; lng: number };
 }
 export interface JobDetail extends JobSummary {
+  customerEmail: string;
   cityCode: string;
   pickup: { lat: number; lng: number }; destination: { lat: number; lng: number };
   operator: { businessName: string; vehicleType: string; vehicleModel: string; vehicleYear: number | null; phone: string | null };
@@ -151,6 +204,9 @@ export async function getJob(id: string) { return api.get<JobDetail>(`/jobs/${id
 export async function createJob(body: unknown) { return api.post<{ id: string; status: string; priceSnapshot: string }>('/jobs', body); }
 export async function patchJob(id: string, action: string) {
   return api.patch<PatchJobResponse>(`/jobs/${id}`, { action });
+}
+export async function updateJobLocation(id: string, point: GeoPoint) {
+  return api.patch<{ ok: boolean }>(`/jobs/${id}/location`, point);
 }
 export async function createReview(jobId: string, rating: number, comment?: string) {
   return api.post(`/jobs/${jobId}/review`, { rating, comment: comment || null });

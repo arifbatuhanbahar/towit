@@ -1,33 +1,22 @@
 import { useState, useEffect } from 'react';
 import { storedUser, logout, getJobs } from './lib/api';
 import type { AuthUser, JobDetail } from './lib/api';
+import type { Screen } from './types/screen';
 
 import { WebHeader, WebSidebar, BottomNav } from './components/WebLayout';
-import MapView from './components/MapView';
-import { Icon } from './components/Icons';
 
 import LoginPage    from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
-
-import CustomerPage    from './pages/customer/CustomerPage';
-import CustomerJobPage from './pages/customer/CustomerJobPage';
-import CustomerProfile from './pages/customer/CustomerProfile';
-import CustomerHistory from './pages/customer/CustomerHistory';
-
-import OperatorHomeWeb from './pages/operator/OperatorHomeWeb';
-import OperatorJobPage from './pages/operator/OperatorJobPage';
 import OperatorRoutePage from './pages/operator/OperatorRoutePage';
-import OperatorProfile from './pages/operator/OperatorProfile';
-import OperatorHistory from './pages/operator/OperatorHistory';
-
-type Screen =
-  | 'login' | 'register'
-  | 'customer_home' | 'customer_job' | 'customer_profile' | 'customer_history'
-  | 'operator_home' | 'operator_job' | 'operator_route' | 'operator_profile' | 'operator_history';
+import CustomerScreens from './screens/CustomerScreens';
+import OperatorScreens from './screens/OperatorScreens';
 
 export default function App() {
-  const [user,      setUser]      = useState<AuthUser | null>(storedUser);
-  const [screen,    setScreen]    = useState<Screen>('login');
+  const initialUser = storedUser();
+  const [user,      setUser]      = useState<AuthUser | null>(initialUser);
+  const [screen,    setScreen]    = useState<Screen>(
+    initialUser ? (initialUser.role === 'customer' ? 'customer_home' : 'operator_home') : 'login'
+  );
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [routeJob,  setRouteJob]  = useState<JobDetail | null>(null);
   const [hasActive, setHasActive] = useState(false);
@@ -107,70 +96,27 @@ export default function App() {
         <WebSidebar user={user} screen={screen} setScreen={s => nav(s as Screen)} reqCount={reqCount} hasActive={hasActive} />
 
         <div className="web-content">
-
-          {/* ── Customer ── */}
-          {screen === 'customer_home' && (
-            <div className="page-wide">
-              <div className="customer-split">
-                <div className="customer-split__wizard">
-                  <CustomerPage
-                    onOpenJob={openJob}
-                    onGoProfile={() => nav('customer_profile')}
-                    onGoHistory={() => nav('customer_history')}
-                  />
-                </div>
-                <div className="customer-split__map-panel">
-                  <MapView height={340} chip={<><Icon.Pin size={11} /> İstanbul</>} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {screen === 'customer_job' && openJobId && (
-            <div className="page-narrow">
-              <CustomerJobPage jobId={openJobId} onBack={() => nav('customer_home')} />
-            </div>
-          )}
-
-          {screen === 'customer_profile' && (
-            <div className="page-narrow">
-              <CustomerProfile user={user} onLogout={handleLogout} onBack={() => nav('customer_home')} />
-            </div>
-          )}
-
-          {screen === 'customer_history' && (
-            <div className="page-narrow">
-              <CustomerHistory onBack={() => nav('customer_home')} onOpenJob={openJob} />
-            </div>
-          )}
-
-          {/* ── Operator ── */}
-          {screen === 'operator_home' && (
-            <OperatorHomeWeb onOpenJob={openJob} />
-          )}
-
-          {screen === 'operator_job' && openJobId && (
-            <div className="page-narrow">
-              <OperatorJobPage
-                jobId={openJobId}
-                onBack={() => nav('operator_home')}
-                onGoRoute={job => { setRouteJob(job); setScreen('operator_route'); }}
-              />
-            </div>
-          )}
-
-          {screen === 'operator_profile' && (
-            <div className="page-narrow">
-              <OperatorProfile onLogout={handleLogout} onBack={() => nav('operator_home')} />
-            </div>
-          )}
-
-          {screen === 'operator_history' && (
-            <div className="page-narrow">
-              <OperatorHistory onBack={() => nav('operator_home')} />
-            </div>
-          )}
-
+          {user.role === 'customer'
+            ? (
+                <CustomerScreens
+                  user={user}
+                  screen={screen}
+                  openJobId={openJobId}
+                  onOpenJob={openJob}
+                  onNavigate={nav}
+                  onLogout={handleLogout}
+                />
+              )
+            : (
+                <OperatorScreens
+                  screen={screen}
+                  openJobId={openJobId}
+                  onOpenJob={openJob}
+                  onNavigate={nav}
+                  onLogout={handleLogout}
+                  onOpenRoute={(job) => { setRouteJob(job); setScreen('operator_route'); }}
+                />
+              )}
         </div>
       </div>
 

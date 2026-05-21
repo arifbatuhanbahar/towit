@@ -7,6 +7,31 @@
 - Node.js 20+
 - Docker (PostgreSQL için)
 
+## Docker Compose ile tam sistem (web + server + db)
+
+Tek komutla tum servisleri kaldirmak icin:
+
+```powershell
+npm run docker:up
+```
+
+Servisler:
+- Web: http://localhost:5173
+- API: http://localhost:4000
+- DB: localhost:5432
+
+Durdurmak icin:
+
+```powershell
+npm run docker:down
+```
+
+Log izlemek icin:
+
+```powershell
+npm run docker:logs
+```
+
 ## Hızlı başlangıç
 
 1. Veritabanını başlatın:

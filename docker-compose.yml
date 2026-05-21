@@ -9,6 +9,39 @@ services:
       - "5432:5432"
     volumes:
       - towit_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U towit -d towit"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DATABASE_URL: postgresql://towit:towit@db:5432/towit
+      JWT_ACCESS_SECRET: towit-dev-secret-change-in-production
+      JWT_REFRESH_SECRET: towit-dev-refresh-secret-change-in-production
+      PORT: 4000
+      NODE_ENV: development
+      CORS_ORIGIN: http://localhost:5173
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      VITE_API_PROXY_TARGET: http://server:4000
+    depends_on:
+      - server
+    ports:
+      - "5173:5173"
 
 volumes:
   towit_pg:
