@@ -1,28 +1,80 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Icon } from '../../components/Icons';
 import MapView from '../../components/MapView';
-import { patchJob, updateJobLocation } from '../../lib/api';
+import { getRouteToDestination, getRouteToPickup, patchJob, updateJobLocation } from '../../lib/api';
 import type { JobDetail } from '../../lib/api';
 import { useEffect } from 'react';
 
 interface Props { job: JobDetail; onBack: () => void; onComplete: () => void; }
 
 export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
-  const [phase, setPhase] = useState<'to_pickup' | 'to_dest'>('to_pickup');
+  const [phase, setPhase] = useState<'to_pickup' | 'to_dest'>(job.status === 'en_route' ? 'to_dest' : 'to_pickup');
   const [tracking, setTracking] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeData, setRouteData] = useState<{
+    origin: { lat: number; lng: number };
+    target: { lat: number; lng: number };
+    points: { lat: number; lng: number }[];
+    durationMinutes: number;
+    distanceKm: number;
+    source: 'google' | 'osrm' | 'straight';
+  } | null>(null);
+  const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number } | null>(
+    job.operatorLocation ? { lat: job.operatorLocation.lat, lng: job.operatorLocation.lng } : null
+  );
+
+  const currentOperatorLocation = liveLocation
+    ?? (job.operatorLocation ? { lat: job.operatorLocation.lat, lng: job.operatorLocation.lng } : null);
+
+  const loadRoute = useCallback(async () => {
+    setRouteLoading(true);
+    try {
+      if (phase === 'to_pickup') {
+        const route = await getRouteToPickup(job.id, currentOperatorLocation ?? undefined);
+        setRouteData({
+          origin: route.origin,
+          target: route.pickup ?? job.pickup,
+          points: route.points,
+          durationMinutes: route.durationMinutes,
+          distanceKm: route.distanceKm,
+          source: route.source,
+        });
+      } else {
+        const route = await getRouteToDestination(job.id, currentOperatorLocation ?? undefined);
+        setRouteData({
+          origin: route.origin,
+          target: route.destination ?? job.destination,
+          points: route.points,
+          durationMinutes: route.durationMinutes,
+          distanceKm: route.distanceKm,
+          source: route.source,
+        });
+      }
+    } catch {
+      setRouteData(null);
+    } finally {
+      setRouteLoading(false);
+    }
+  }, [phase, job.id, job.pickup, job.destination, currentOperatorLocation]);
 
   useEffect(() => {
     if (!tracking || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => {
-        void updateJobLocation(job.id, { lat: coords.latitude, lng: coords.longitude }).catch(() => {});
+        const point = { lat: coords.latitude, lng: coords.longitude };
+        setLiveLocation(point);
+        void updateJobLocation(job.id, point).catch(() => {});
       },
       () => {},
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [tracking, job.id]);
+
+  useEffect(() => {
+    void loadRoute();
+  }, [loadRoute]);
 
   async function advance() {
     if (phase === 'to_pickup') {
@@ -46,10 +98,22 @@ export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
     }
   }
 
+  const mapStart = routeData?.origin ?? currentOperatorLocation ?? (phase === 'to_pickup' ? job.pickup : job.pickup);
+  const mapEnd = routeData?.target ?? (phase === 'to_pickup' ? job.pickup : job.destination);
+  const etaMinutes = routeData?.durationMinutes ?? (phase === 'to_pickup' ? 9 : 14);
+  const distanceKm = routeData?.distanceKm ?? job.distanceKm;
+  const etaLabel = routeData?.source === 'straight' ? 'tahmini varış (yedek)' : 'tahmini varış';
+
   return (
     <div className="rota-shell">
       <div style={{ position: 'absolute', inset: 0 }}>
-        <MapView height="100%" pickup={job.pickup} destination={job.destination} operatorLocation={job.operatorLocation} />
+        <MapView
+          height="100%"
+          pickup={mapStart}
+          destination={mapEnd}
+          operatorLocation={currentOperatorLocation}
+          routePoints={routeData?.points ?? null}
+        />
       </div>
 
       <div className="rota-top">
@@ -66,17 +130,17 @@ export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
 
       <div className="rota-eta">
         <div>
-          <div className="rota-eta__time">{phase === 'to_pickup' ? '~9 dk' : '~14 dk'}</div>
-          <div className="rota-eta__sub">tahmini varış</div>
+          <div className="rota-eta__time">{routeLoading ? '...' : `~${etaMinutes} dk`}</div>
+          <div className="rota-eta__sub">{etaLabel}</div>
         </div>
-        <div className="rota-eta__dist">{job.distanceKm.toFixed(1)} km</div>
+        <div className="rota-eta__dist">{distanceKm.toFixed(1)} km</div>
       </div>
 
       <div className="rota-fab-group">
         <button type="button" className={`rota-fab${tracking ? ' is-active' : ''}`} onClick={() => setTracking(t => !t)} aria-label="Konum takibi">
           <Icon.Crosshair size={20} />
         </button>
-        <button type="button" className="rota-fab" aria-label="Rotayı yenile">
+        <button type="button" className="rota-fab" aria-label="Rotayı yenile" onClick={() => void loadRoute()}>
           <Icon.Refresh size={17} />
         </button>
       </div>

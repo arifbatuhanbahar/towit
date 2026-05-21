@@ -4,13 +4,12 @@ import { prisma } from "../lib/db.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
 import {
   hashRefreshToken,
-  signAccessToken,
-  signRefreshToken,
   verifyAccessToken,
 } from "../lib/jwt.js";
 import { sendError } from "../lib/errors.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { validateBody, getBody } from "../middleware/validate.js";
+import { issueSession } from "../services/authSession.js";
 
 /** Brute-force'u zorlaştırmak için IP+path başına dakikada 10 giriş/kayıt/refresh isteği. */
 const authLimiter = rateLimit({ windowMs: 60_000, max: 10 });
@@ -61,17 +60,12 @@ authRouter.post("/register", authLimiter, validateBody(registerSchema), async (r
     },
   });
 
-  const accessToken = signAccessToken({ sub: user.id, role: user.role });
-  const rawRefresh = signRefreshToken();
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
-  await prisma.refreshToken.create({
-    data: { userId: user.id, tokenHash: hashRefreshToken(rawRefresh), expiresAt },
-  });
+  const { accessToken, refreshToken } = await issueSession(user.id, user.role);
 
   return res.status(201).json({
     user: { id: user.id, email: user.email, role: user.role },
     accessToken,
-    refreshToken: rawRefresh,
+    refreshToken,
   });
 });
 
@@ -82,17 +76,12 @@ authRouter.post("/login", authLimiter, validateBody(loginSchema), async (req, re
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) return sendError(res, 401, "UNAUTHORIZED", "E-posta veya parola hatalı");
 
-  const accessToken = signAccessToken({ sub: user.id, role: user.role });
-  const rawRefresh = signRefreshToken();
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
-  await prisma.refreshToken.create({
-    data: { userId: user.id, tokenHash: hashRefreshToken(rawRefresh), expiresAt },
-  });
+  const { accessToken, refreshToken } = await issueSession(user.id, user.role);
 
   return res.json({
     user: { id: user.id, email: user.email, role: user.role },
     accessToken,
-    refreshToken: rawRefresh,
+    refreshToken,
   });
 });
 
@@ -108,14 +97,10 @@ authRouter.post("/refresh", authLimiter, validateBody(refreshSchema), async (req
 
   await prisma.refreshToken.delete({ where: { id: row.id } });
 
-  const accessToken = signAccessToken({ sub: user.id, role: user.role });
-  const rawRefresh = signRefreshToken();
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
-  await prisma.refreshToken.create({
-    data: { userId: user.id, tokenHash: hashRefreshToken(rawRefresh), expiresAt },
-  });
+  const nextRole = user.role as "customer" | "operator";
+  const { accessToken, refreshToken: nextRefreshToken } = await issueSession(user.id, nextRole);
 
-  return res.json({ accessToken, refreshToken: rawRefresh });
+  return res.json({ accessToken, refreshToken: nextRefreshToken });
 });
 
 /** İstemci access süresi dolduğunda doğrulama (FR-12). */

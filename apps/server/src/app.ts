@@ -9,6 +9,7 @@ import { jobsRouter } from "./routes/jobs.js";
 import { directionsRouter } from "./routes/directions.js";
 import { reviewsRouter } from "./routes/reviews.js";
 import { logger } from "./lib/logger.js";
+import { sendError } from "./lib/errors.js";
 
 function isDatabaseUnavailable(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -51,7 +52,7 @@ export function createApp() {
   app.use(reviewsRouter);
 
   app.use((_req, res) => {
-    res.status(404).json({ error: { code: "NOT_FOUND", message: "Kaynak bulunamadı" } });
+    return sendError(res, 404, "NOT_FOUND", "Kaynak bulunamadı");
   });
 
   app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -63,25 +64,23 @@ export function createApp() {
     });
 
     if (isDatabaseUnavailable(err)) {
-      return res.status(503).json({
-        error: {
-          code: "DB_UNAVAILABLE",
-          message: "Veritabani baglantisi kurulamadi. Lutfen PostgreSQL servisini baslatin.",
-        },
-      });
+      return sendError(
+        res,
+        503,
+        "DB_UNAVAILABLE",
+        "Veritabani baglantisi kurulamadi. Lutfen PostgreSQL servisini baslatin."
+      );
     }
     if (isDatabaseNotReady(err)) {
-      return res.status(503).json({
-        error: {
-          code: "DB_NOT_READY",
-          message: "Veritabani hazir degil. Migrasyonlari calistirin: npm run db:migrate",
-        },
-      });
+      return sendError(
+        res,
+        503,
+        "DB_NOT_READY",
+        "Veritabani hazir degil. Migrasyonlari calistirin: npm run db:migrate"
+      );
     }
 
-    return res.status(500).json({
-      error: { code: "INTERNAL", message: "Beklenmeyen bir hata oluştu" },
-    });
+    return sendError(res, 500, "INTERNAL", "Beklenmeyen bir hata oluştu");
   });
 
   return app;

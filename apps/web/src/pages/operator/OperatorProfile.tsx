@@ -34,7 +34,7 @@ export default function OperatorProfile({ onLogout, onBack }: Props) {
 
   useEffect(() => {
     getMe().then(r => {
-      const p = r.operatorProfile as any;
+      const p = r.operatorProfile;
       if (p) {
         setActive(p.isActive ?? true);
         setBusinessName(p.businessName ?? '');
