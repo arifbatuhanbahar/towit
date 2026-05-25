@@ -234,6 +234,14 @@ export interface JobRouteResponse {
   durationMinutes: number;
   source: 'google' | 'osrm' | 'straight';
 }
+export interface DirectionsResponse {
+  points: GeoPoint[];
+  distanceMeters: number;
+  distanceKm: number;
+  durationSeconds: number;
+  durationMinutes: number;
+  source: 'google' | 'osrm' | 'straight';
+}
 
 export async function getJobs() { return api.get<{ jobs: JobSummary[] }>('/jobs'); }
 export async function getJob(id: string) { return api.get<JobDetail>(`/jobs/${id}`); }
@@ -253,6 +261,15 @@ export async function getRouteToPickup(id: string, origin?: GeoPoint) {
 }
 export async function getRouteToDestination(id: string, origin?: GeoPoint) {
   return api.get<JobRouteResponse>(withOrigin(`/jobs/${id}/route-to-destination`, origin));
+}
+export async function getDirections(from: GeoPoint, to: GeoPoint) {
+  const params = new URLSearchParams({
+    fromLat: String(from.lat),
+    fromLng: String(from.lng),
+    toLat: String(to.lat),
+    toLng: String(to.lng),
+  });
+  return api.get<DirectionsResponse>(`/directions?${params.toString()}`);
 }
 export async function createReview(jobId: string, rating: number, comment?: string) {
   return api.post(`/jobs/${jobId}/review`, { rating, comment: comment || null });

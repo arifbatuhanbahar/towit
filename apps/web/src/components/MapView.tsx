@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import type { ReactNode } from 'react';
 import L from 'leaflet';
+import { getDirections } from '../lib/api';
 
 // ── Custom SVG div-icons (no broken PNG paths) ────────────────────────────────
 function svgIcon(svg: string, size = 32) {
@@ -69,6 +70,7 @@ interface MapViewProps {
   center?: LatLng;
   chip?: ReactNode;
   interactive?: boolean;
+  interactionHint?: ReactNode;
   onSelectLocation?: (point: LatLng) => void;
 }
 
@@ -84,6 +86,7 @@ export default function MapView({
   center,
   chip,
   interactive = false,
+  interactionHint,
   onSelectLocation,
 }: MapViewProps) {
   const [route, setRoute] = useState<{
@@ -109,30 +112,27 @@ export default function MapView({
     const destinationLat = destination.lat;
     const destinationLng = destination.lng;
 
-    const url = `https://router.project-osrm.org/route/v1/driving/${pickupLng},${pickupLat};${destinationLng},${destinationLat}?overview=full&geometries=geojson`;
-
-    fetch(url, { signal: ctrl.signal })
-      .then(r => r.json())
-      .then(d => {
-        if (d.routes?.[0]?.geometry?.coordinates) {
-          const coords: [number, number][] = d.routes[0].geometry.coordinates.map(
-            ([lng, lat]: [number, number]) => [lat, lng]
-          );
-          setRoute({
-            from: { lat: pickupLat, lng: pickupLng },
-            to: { lat: destinationLat, lng: destinationLng },
-            points: coords,
-          });
-        }
+    void getDirections(
+      { lat: pickupLat, lng: pickupLng },
+      { lat: destinationLat, lng: destinationLng }
+    )
+      .then((data) => {
+        if (ctrl.signal.aborted) return;
+        const coords = data.points;
+        if (!coords || coords.length < 2) return;
+        setRoute({
+          from: { lat: pickupLat, lng: pickupLng },
+          to: { lat: destinationLat, lng: destinationLng },
+          points: coords.map((point) => [point.lat, point.lng] as [number, number]),
+        });
       })
       .catch(() => {
-        if (!ctrl.signal.aborted) {
-          setRoute({
-            from: { lat: pickupLat, lng: pickupLng },
-            to: { lat: destinationLat, lng: destinationLng },
-            points: [[pickupLat, pickupLng], [destinationLat, destinationLng]],
-          });
-        }
+        if (ctrl.signal.aborted) return;
+        setRoute({
+          from: { lat: pickupLat, lng: pickupLng },
+          to: { lat: destinationLat, lng: destinationLng },
+          points: [[pickupLat, pickupLng], [destinationLat, destinationLng]],
+        });
       });
 
     return () => ctrl.abort();
@@ -188,6 +188,7 @@ export default function MapView({
       </MapContainer>
 
       {chip && <div className="map__chip">{chip}</div>}
+      {interactive && interactionHint && <div className="map__hint">{interactionHint}</div>}
     </div>
   );
 }

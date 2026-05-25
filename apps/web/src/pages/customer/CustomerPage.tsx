@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stepper, PillToggle, ErrorInline } from '../../components/Shared';
 import { BreakdownIcon, VehicleIcon } from '../../components/Icons';
 import MapView from '../../components/MapView';
 import { searchOperators, createJob, getJobs, searchPlaces, reverseGeocode } from '../../lib/api';
 import type { OperatorResult, JobSummary, PlaceResult } from '../../lib/api';
 import type { LatLng } from '../../components/MapView';
+import type { ReactNode } from 'react';
 
 const CITIES = [
   { name: 'İstanbul', code: '34' }, { name: 'Ankara', code: '06' }, { name: 'İzmir', code: '35' },
@@ -18,9 +19,29 @@ const BREAKDOWN_OPTS = [
 const STEP_TITLES = ['Bölge seç', 'Aracınız', 'Çekim noktası', 'Varış noktası', 'Çekici seç'];
 const ISTANBUL: LatLng = { lat: 41.0082, lng: 28.9784 };
 
-interface Props { onOpenJob: (jobId: string) => void; onGoProfile: () => void; onGoHistory: () => void; }
+export interface CustomerMapPanelContext {
+  step: number;
+  panelTitle: string;
+  panelEyebrow: string;
+  center: LatLng;
+  pickup: LatLng | null;
+  destination: LatLng | null;
+  pickupLabel?: string;
+  destinationLabel?: string;
+  interactive: boolean;
+  chip: ReactNode;
+  interactionHint?: ReactNode;
+  helperText: string;
+  onSelectLocation?: (point: LatLng) => void;
+}
 
-export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Props) {
+interface Props {
+  onOpenJob: (jobId: string) => void;
+  mapPanelActive?: boolean;
+  onMapPanelChange?: (context: CustomerMapPanelContext) => void;
+}
+
+export default function CustomerPage({ onOpenJob, mapPanelActive = false, onMapPanelChange }: Props) {
   const [step, setStep]         = useState(1);
   const [city, setCity]         = useState(CITIES[0]);
   const [cityQ, setCityQ]       = useState('');
@@ -59,7 +80,7 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
 
   async function goToStep5() {
     if (!pickup || !destination) {
-      setErr('Lutfen cekim ve varis konumlarini secin.');
+      setErr('Lütfen çekim ve varış konumlarını seçin.');
       return;
     }
     setErr('');
@@ -75,7 +96,7 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
 
   async function handleSelectOperator(op: OperatorResult) {
     if (!pickup || !destination) {
-      setErr('Konum bilgisi eksik. Lutfen cekim ve varis noktalarini secin.');
+      setErr('Konum bilgisi eksik. Lütfen çekim ve varış noktalarını seçin.');
       return;
     }
     setCreating(true); setErr('');
@@ -108,28 +129,28 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
 
   function next() {
     if (step === 3 && !pickup) {
-      setErr('Devam etmeden once cekim noktasini secin.');
+      setErr('Devam etmeden önce çekim noktasını seçin.');
       return;
     }
     if (step === 4) { goToStep5(); return; }
     setStep(s => s + 1);
   }
 
-  async function handlePickupSelect(point: LatLng) {
+  const handlePickupSelect = useCallback(async (point: LatLng) => {
     setPickup(point);
     setErr('');
     const label = await reverseGeocode(point).catch(() => `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`);
     setPickupAddr(label);
-  }
+  }, []);
 
-  async function handleDestinationSelect(point: LatLng) {
+  const handleDestinationSelect = useCallback(async (point: LatLng) => {
     setDestination(point);
     setErr('');
     const label = await reverseGeocode(point).catch(() => `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`);
     setDestAddr(label);
     setDestSearch(label);
     setDestResults([]);
-  }
+  }, []);
 
   async function runDestSearch() {
     const query = destSearch.trim();
@@ -139,9 +160,9 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
     try {
       const results = await searchPlaces(query, 6);
       setDestResults(results);
-      if (results.length === 0) setErr('Adres bulunamadi. Haritadan secmeyi deneyin.');
+      if (results.length === 0) setErr('Adres bulunamadı. Haritadan seçmeyi deneyin.');
     } catch {
-      setErr('Adres aramasi yapilamadi.');
+      setErr('Adres araması yapılamadı.');
     } finally {
       setSearchingDest(false);
     }
@@ -154,14 +175,64 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
     setDestResults([]);
   }
 
+  useEffect(() => {
+    if (!onMapPanelChange) return;
+    if (step === 3) {
+      onMapPanelChange({
+        step,
+        panelTitle: STEP_TITLES[step - 1],
+        panelEyebrow: 'Konum seçimi',
+        center: pickup ?? ISTANBUL,
+        pickup,
+        destination: null,
+        pickupLabel: pickupAddr,
+        destinationLabel: '',
+        interactive: true,
+        chip: <><span>📍</span> Çekim noktasını seçin</>,
+        interactionHint: <><span className="dot" /> Haritada bir noktaya tıklayın</>,
+        helperText: pickup ? 'Çekim noktası seçildi. Gerekirse büyük haritadan yeniden seçin.' : 'Nokta seçmek için büyük haritaya tıklayın.',
+        onSelectLocation: handlePickupSelect,
+      });
+      return;
+    }
+    if (step === 4) {
+      onMapPanelChange({
+        step,
+        panelTitle: STEP_TITLES[step - 1],
+        panelEyebrow: 'Konum seçimi',
+        center: destination ?? pickup ?? ISTANBUL,
+        pickup,
+        destination,
+        pickupLabel: pickupAddr,
+        destinationLabel: destAddr,
+        interactive: true,
+        chip: <><span>📌</span> Varış noktasını seçin</>,
+        interactionHint: <><span className="dot" /> Varış noktası için haritaya tıklayın</>,
+        helperText: destination ? 'Varış noktası seçildi. Büyük haritada düzeltebilirsiniz.' : 'Varış noktası seçmek için büyük haritaya tıklayın.',
+        onSelectLocation: handleDestinationSelect,
+      });
+      return;
+    }
+    onMapPanelChange({
+      step,
+      panelTitle: STEP_TITLES[step - 1],
+      panelEyebrow: step >= 5 ? 'Rota özeti' : 'Talep akışı',
+      center: destination ?? pickup ?? ISTANBUL,
+      pickup,
+      destination,
+      pickupLabel: pickupAddr,
+      destinationLabel: destAddr,
+      interactive: false,
+      chip: <><span>🗺️</span> Rota önizlemesi</>,
+      interactionHint: undefined,
+      helperText: 'Konum seçim adımlarında büyük harita otomatik olarak etkileşimli olur.',
+    });
+  }, [step, pickup, destination, pickupAddr, destAddr, onMapPanelChange, handlePickupSelect, handleDestinationSelect]);
+
   return (
     <div className="towit">
       <div className="scroll-area">
-        <div className="screen">
-          <div className="nav-shortcuts" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button type="button" className="btn btn-ghost btn-sm btn-square" style={{ width: 'auto', minHeight: 32, padding: '0 12px', fontSize: '0.8rem' }} onClick={onGoHistory}>Geçmiş</button>
-            <button type="button" className="btn btn-ghost btn-sm btn-square" style={{ width: 'auto', minHeight: 32, padding: '0 12px', fontSize: '0.8rem' }} onClick={onGoProfile}>Profil</button>
-          </div>
+        <div className={`screen${mapPanelActive ? ' customer-wizard' : ''}`}>
           <ErrorInline onClose={() => setErr('')}>{err}</ErrorInline>
           <Stepper step={step} total={5} title={STEP_TITLES[step - 1]} />
 
@@ -225,24 +296,26 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
           {/* Adım 3: Çekim noktası */}
           {step === 3 && (
             <div className="stack-4">
-              <MapView
-                height={250}
-                center={pickup ?? ISTANBUL}
-                pickup={pickup}
-                interactive
-                onSelectLocation={handlePickupSelect}
-                chip={<><span>📍</span> Cekim noktasini secin</>}
-              />
+              {!mapPanelActive && (
+                <MapView
+                  height={250}
+                  center={pickup ?? ISTANBUL}
+                  pickup={pickup}
+                  interactive
+                  onSelectLocation={handlePickupSelect}
+                  chip={<><span>📍</span> Çekim noktasını seçin</>}
+                />
+              )}
               {pickup ? (
                 <div className="coord-confirm">
                   <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
                   <div className="stack-2">
-                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Cekim noktasi secildi</strong>
+                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Çekim noktası seçildi</strong>
                     <span style={{ fontSize: 12, color: 'var(--success)' }}>{pickupAddr || `${pickup.lat.toFixed(5)}, ${pickup.lng.toFixed(5)}`}</span>
                   </div>
                 </div>
               ) : (
-                <div className="t-muted" style={{ fontSize: '0.8rem' }}>Harita uzerinden bir nokta secin.</div>
+                <div className="t-muted" style={{ fontSize: '0.8rem' }}>Harita üzerinden bir nokta seçin.</div>
               )}
             </div>
           )}
@@ -260,10 +333,10 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
                       value={destSearch}
                       onChange={e => setDestSearch(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); runDestSearch(); } }}
-                      placeholder="Sokak, mahalle, ilce..."
+                      placeholder="Sokak, mahalle, ilçe..."
                     />
                     <button type="button" className="btn btn-ghost btn-square" style={{ width: 'auto', padding: '0 14px' }} onClick={runDestSearch} disabled={searchingDest}>
-                      {searchingDest ? 'Araniyor...' : 'Ara'}
+                      {searchingDest ? 'Aranıyor...' : 'Ara'}
                     </button>
                   </div>
                   {destResults.length > 0 && (
@@ -284,20 +357,22 @@ export default function CustomerPage({ onOpenJob, onGoProfile, onGoHistory }: Pr
                 </div>
               )}
 
-              <MapView
-                height={250}
-                center={destination ?? pickup ?? ISTANBUL}
-                pickup={pickup}
-                destination={destination}
-                interactive
-                onSelectLocation={handleDestinationSelect}
-                chip={<><span>📌</span> Varis noktasini secin</>}
-              />
+              {!mapPanelActive && (
+                <MapView
+                  height={250}
+                  center={destination ?? pickup ?? ISTANBUL}
+                  pickup={pickup}
+                  destination={destination}
+                  interactive
+                  onSelectLocation={handleDestinationSelect}
+                  chip={<><span>📌</span> Varış noktasını seçin</>}
+                />
+              )}
               {destination && (
                 <div className="coord-confirm">
                   <span className="coord-confirm__check"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
                   <div className="stack-2">
-                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Varis noktasi secildi</strong>
+                    <strong style={{ fontSize: 13, fontWeight: 800 }}>Varış noktası seçildi</strong>
                     <span style={{ fontSize: 12, color: 'var(--success)' }}>{destAddr || `${destination.lat.toFixed(5)}, ${destination.lng.toFixed(5)}`}</span>
                   </div>
                 </div>

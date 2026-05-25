@@ -244,6 +244,47 @@ async function tryOrsRoute(origin: LatLng, destination: LatLng): Promise<RouteRe
   }
 }
 
+/**
+ * Public OSRM demo servisi — anahtarsız yol geometrisi sağlar.
+ * Kısa süreli yedek amaçlı kullanılır; kota/erişilebilirlik garantisi yoktur.
+ */
+async function tryPublicOsrmRoute(origin: LatLng, destination: LatLng): Promise<RouteResult | null> {
+  const url = new URL(
+    `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}`
+  );
+  url.searchParams.set("overview", "full");
+  url.searchParams.set("geometries", "geojson");
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      code?: string;
+      routes?: Array<{
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: [number, number][] };
+      }>;
+    };
+    const route = data.routes?.[0];
+    const coords = route?.geometry?.coordinates;
+    if (data.code !== "Ok" || !coords || coords.length < 2) return null;
+
+    return {
+      points: coords.map(([lng, lat]) => ({ lat, lng })),
+      distanceMeters: Math.max(0, route?.distance ?? 0),
+      durationSeconds: Math.max(1, Math.round(route?.duration ?? 0)),
+      source: "osrm",
+    };
+  } catch (err) {
+    logger.warn("Public OSRM request failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 function straightLineRoute(origin: LatLng, destination: LatLng): RouteResult {
   const km = haversineKm(origin, destination);
   const distanceMeters = km * 1000;
@@ -257,7 +298,7 @@ function straightLineRoute(origin: LatLng, destination: LatLng): RouteResult {
 }
 
 /**
- * İki nokta arasında rota: önce Google (trafik modeli), sonra ORS yol ağı, son çare düz hat.
+ * İki nokta arasında rota: Google, ORS, public OSRM, son çare düz hat.
  */
 export async function routeBetween(origin: LatLng, destination: LatLng): Promise<RouteResult> {
   try {
@@ -272,6 +313,13 @@ export async function routeBetween(origin: LatLng, destination: LatLng): Promise
     if (o && o.points.length >= 2 && o.distanceMeters > 0) return o;
   } catch {
     /* ORS erişilemez */
+  }
+
+  try {
+    const publicOsrm = await tryPublicOsrmRoute(origin, destination);
+    if (publicOsrm && publicOsrm.points.length >= 2 && publicOsrm.distanceMeters > 0) return publicOsrm;
+  } catch {
+    /* public OSRM erişilemez */
   }
 
   return straightLineRoute(origin, destination);

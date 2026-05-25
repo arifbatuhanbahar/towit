@@ -95,6 +95,7 @@ export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
       setLoading(true);
       try {
         await patchJob(job.id, 'en_route');
+        setRouteData(null);
         setPhase('to_dest');
       } catch {
         // keep current phase when transition fails
@@ -112,7 +113,7 @@ export default function OperatorRoutePage({ job, onBack, onComplete }: Props) {
     }
   }
 
-  const mapStart = routeData?.origin ?? currentOperatorLocation ?? (phase === 'to_pickup' ? job.pickup : job.pickup);
+  const mapStart = routeData?.origin ?? currentOperatorLocation ?? job.pickup;
   const mapEnd = routeData?.target ?? (phase === 'to_pickup' ? job.pickup : job.destination);
   const etaMinutes = routeData?.durationMinutes ?? (phase === 'to_pickup' ? 9 : 14);
   const distanceKm = routeData?.distanceKm ?? job.distanceKm;

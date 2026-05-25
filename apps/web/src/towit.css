@@ -622,6 +622,33 @@
   color: var(--text-faint); text-transform: uppercase;
   display: inline-flex; align-items: center; gap: 6px;
 }
+.map__hint {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.82);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(245,158,11,0.28);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: var(--r-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  z-index: 4;
+  pointer-events: none;
+}
+.map__hint .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 4px rgba(245,158,11,0.16);
+}
 .map__route-badge {
   position: absolute; bottom: 10px; left: 10px; display: flex; gap: 8px;
 }

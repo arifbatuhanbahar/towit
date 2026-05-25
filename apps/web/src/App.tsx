@@ -20,6 +20,7 @@ export default function App() {
   const [openJobId, setOpenJobId] = useState<string | null>(null);
   const [routeJob,  setRouteJob]  = useState<JobDetail | null>(null);
   const [hasActive, setHasActive] = useState(false);
+  const [activeCustomerJobId, setActiveCustomerJobId] = useState<string | null>(null);
   const [reqCount,  setReqCount]  = useState(0);
 
   // Poll counts for sidebar badges
@@ -27,7 +28,12 @@ export default function App() {
     if (!user) return;
     function poll() {
       getJobs().then(r => {
-        setHasActive(r.jobs.some(j => j.status === 'accepted' || j.status === 'en_route'));
+        const activeCustomerJobs = r.jobs.filter(j => ['open', 'accepted', 'en_route'].includes(j.status));
+        const latestActive = activeCustomerJobs
+          .slice()
+          .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0];
+        setHasActive(activeCustomerJobs.length > 0);
+        setActiveCustomerJobId(latestActive?.id ?? null);
         setReqCount(r.jobs.filter(j => j.status === 'open').length);
       }).catch(() => {});
     }
@@ -41,6 +47,7 @@ export default function App() {
     setUser(null);
     setScreen('login');
     setOpenJobId(null);
+    setActiveCustomerJobId(null);
     setRouteJob(null);
   }
 
@@ -54,8 +61,16 @@ export default function App() {
       setOpenJobId(null);
       setRouteJob(null);
     }
-    // If navigating to a job screen without a job selected, go to home instead
-    if (s === 'customer_job' && !openJobId) { setScreen('customer_home'); return; }
+    // Customer active request page should open latest active request if no explicit selection.
+    if (s === 'customer_job' && !openJobId) {
+      if (activeCustomerJobId) {
+        setOpenJobId(activeCustomerJobId);
+        setScreen('customer_job');
+        return;
+      }
+      setScreen('customer_home');
+      return;
+    }
     if (s === 'operator_job' && !openJobId) { setScreen('operator_home'); return; }
     setScreen(s);
   }

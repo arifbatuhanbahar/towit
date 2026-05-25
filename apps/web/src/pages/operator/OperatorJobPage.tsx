@@ -55,6 +55,11 @@ export default function OperatorJobPage({ jobId, onBack, onGoRoute }: Props) {
   const BIcon = BreakdownIcon[job.breakdownType] || BreakdownIcon.diger;
   const action = ACTIONS[job.status];
   const phoneVisible = job.status === 'accepted' || job.status === 'en_route';
+  const liveOperatorPoint = job.operatorLocation
+    ? { lat: job.operatorLocation.lat, lng: job.operatorLocation.lng }
+    : null;
+  const mapOrigin = liveOperatorPoint && phoneVisible ? liveOperatorPoint : job.pickup;
+  const mapDestination = job.status === 'accepted' ? job.pickup : job.destination;
 
   return (
     <div className="towit">
@@ -111,7 +116,12 @@ export default function OperatorJobPage({ jobId, onBack, onGoRoute }: Props) {
             ))}
           </div>
 
-          <MapView height={190} pickup={job.pickup} destination={job.destination} />
+          <MapView
+            height={190}
+            pickup={mapOrigin}
+            destination={mapDestination}
+            operatorLocation={phoneVisible ? liveOperatorPoint : null}
+          />
 
           {action && (
             <button className={`btn ${action.cls} btn-square`} style={{ minHeight: 60, fontSize: '1rem', borderRadius: 'var(--r-lg)' }} disabled={action.disabled || acting} onClick={handleAction}>

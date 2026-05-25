@@ -14,6 +14,7 @@ export default function CustomerProfile({ user, onLogout, onBack }: Props) {
   const [saved, setSaved] = useState(false);
   const [err, setErr]     = useState('');
   const [loading, setLoading] = useState(false);
+  const avatarLetter = (name.trim().charAt(0) || user.email.trim().charAt(0) || 'K').toUpperCase();
 
   useEffect(() => {
     getMe().then(r => {
@@ -51,7 +52,7 @@ export default function CustomerProfile({ user, onLogout, onBack }: Props) {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 'var(--s-5)', background: 'var(--surface)', borderRadius: 'var(--r-lg)' }}>
             <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '1.5rem', color: 'var(--primary)', flexShrink: 0 }}>
-              {(name[0] || user.email[0]).toUpperCase()}
+              {avatarLetter}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: '1.05rem', letterSpacing: '-0.02em' }}>{name || user.email}</div>

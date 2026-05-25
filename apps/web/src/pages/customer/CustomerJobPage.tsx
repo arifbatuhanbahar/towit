@@ -41,6 +41,11 @@ export default function CustomerJobPage({ jobId, onBack }: Props) {
 
   const VIcon = VehicleIcon[job.operator.vehicleType] || VehicleIcon.platform;
   const phoneVisible = job.status === 'accepted' || job.status === 'en_route';
+  const liveOperatorPoint = job.operatorLocation
+    ? { lat: job.operatorLocation.lat, lng: job.operatorLocation.lng }
+    : null;
+  const mapOrigin = liveOperatorPoint && phoneVisible ? liveOperatorPoint : job.pickup;
+  const mapDestination = job.status === 'accepted' ? job.pickup : job.destination;
   const events = [
     { label: 'Talep oluşturuldu', state: 'done' },
     { label: 'Çekici kabul etti', state: ['accepted', 'en_route', 'completed'].includes(job.status) ? 'done' : 'pending' },
@@ -77,7 +82,12 @@ export default function CustomerJobPage({ jobId, onBack }: Props) {
             )}
           </div>
 
-          <MapView height={200} pickup={job.pickup} destination={job.destination} operatorLocation={job.status === 'en_route' ? job.operatorLocation : null} />
+          <MapView
+            height={200}
+            pickup={mapOrigin}
+            destination={mapDestination}
+            operatorLocation={phoneVisible ? liveOperatorPoint : null}
+          />
 
           {/* Operatör bilgi kartı */}
           <div className="card stack-3">

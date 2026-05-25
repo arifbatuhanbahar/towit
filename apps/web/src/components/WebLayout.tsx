@@ -19,7 +19,7 @@ interface NavItem { id: string; label: string; I: NavIcon; }
 
 const CUSTOMER_MAIN: NavItem[] = [
   { id: 'customer_home', label: 'Ana sayfa', I: WIcon.Home },
-  { id: 'customer_job',  label: 'Aktif iş',  I: WIcon.Map  },
+  { id: 'customer_job',  label: 'Aktif talep',  I: WIcon.Map  },
 ];
 const CUSTOMER_ACCOUNT: NavItem[] = [
   { id: 'customer_history', label: 'Geçmiş', I: WIcon.Clock },
