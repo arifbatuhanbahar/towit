@@ -49,6 +49,14 @@ function ClickToSelect({ enabled, onSelect }: { enabled: boolean; onSelect?: (po
   return null;
 }
 
+function FitRoute({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    map.fitBounds(points, { padding: [40, 40], maxZoom: 15 });
+  }, [map, points]);
+  return null;
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface LatLng { lat: number; lng: number; }
 
@@ -78,16 +86,18 @@ export default function MapView({
   interactive = false,
   onSelectLocation,
 }: MapViewProps) {
-  const [route, setRoute] = useState<[number, number][] | null>(null);
+  const [route, setRoute] = useState<{
+    from: LatLng;
+    to: LatLng;
+    points: [number, number][];
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (routePoints && routePoints.length >= 2) {
-      setRoute(null);
       return;
     }
     if (!pickup || !destination) {
-      setRoute(null);
       return;
     }
 
@@ -108,12 +118,20 @@ export default function MapView({
           const coords: [number, number][] = d.routes[0].geometry.coordinates.map(
             ([lng, lat]: [number, number]) => [lat, lng]
           );
-          setRoute(coords);
+          setRoute({
+            from: { lat: pickupLat, lng: pickupLng },
+            to: { lat: destinationLat, lng: destinationLng },
+            points: coords,
+          });
         }
       })
       .catch(() => {
         if (!ctrl.signal.aborted) {
-          setRoute([[pickupLat, pickupLng], [destinationLat, destinationLng]]);
+          setRoute({
+            from: { lat: pickupLat, lng: pickupLng },
+            to: { lat: destinationLat, lng: destinationLng },
+            points: [[pickupLat, pickupLng], [destinationLat, destinationLng]],
+          });
         }
       });
 
@@ -126,18 +144,18 @@ export default function MapView({
     if (routePoints && routePoints.length >= 2) {
       return routePoints.map((p) => [p.lat, p.lng] as [number, number]);
     }
-    if (route) return route;
-    if (pickup && destination) return [[pickup.lat, pickup.lng], [destination.lat, destination.lng]] as [number, number][];
-    return null;
+    if (!pickup || !destination) return null;
+    if (
+      route &&
+      route.from.lat === pickup.lat &&
+      route.from.lng === pickup.lng &&
+      route.to.lat === destination.lat &&
+      route.to.lng === destination.lng
+    ) {
+      return route.points;
+    }
+    return [[pickup.lat, pickup.lng], [destination.lat, destination.lng]] as [number, number][];
   }, [routePoints, route, pickup, destination]);
-
-  function FitRoute({ points }: { points: [number, number][] }) {
-    const map = useMap();
-    useEffect(() => {
-      map.fitBounds(points, { padding: [40, 40], maxZoom: 15 });
-    }, [map, points]);
-    return null;
-  }
 
   return (
     <div style={{ height, borderRadius: 'var(--r-md)', overflow: 'hidden', position: 'relative' }} className="map-real">

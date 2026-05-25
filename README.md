@@ -51,6 +51,12 @@ npm run db:generate -w apps/server
 npm run db:migrate -w apps/server
 ```
 
+`db:migrate` komutu artık demo hesapları da otomatik seed eder:
+
+- Müşteri: `musteri@towit.tr`
+- Çekici şoförü: `sofor@towit.tr`
+- Parola: `demo1234`
+
 4. Geliştirme (API + web birlikte):
 
 ```powershell
@@ -88,7 +94,9 @@ npm run docker:up
 
 3. Uygulama akis testi:
 
-- `customer` ve `operator` hesaplari olusturun (veya demo hesaplari kullanin).
+- Demo hesaplarla dogrudan giris yapin:
+  - `musteri@towit.tr` / `demo1234`
+  - `sofor@towit.tr` / `demo1234`
 - Operator profili doldurun:
   - arac tipi
   - tarife
