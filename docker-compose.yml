@@ -19,6 +19,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.server
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://towit:towit@db:5432/towit
       JWT_ACCESS_SECRET: towit-dev-secret-change-in-production
